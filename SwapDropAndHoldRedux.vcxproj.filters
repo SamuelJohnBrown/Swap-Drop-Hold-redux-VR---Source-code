@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="main.cpp" />
+    <ClCompile Include="Engine.cpp" />
+    <ClCompile Include="RandomSelector.cpp" />
+    <ClCompile Include="config.cpp" />
+    <ClCompile Include="higgsinterface001.cpp" />
+    <ClCompile Include="spellwheelinterface001.cpp" />
+    <ClCompile Include="SkyrimVRESLAPI.cpp" />
+    <ClCompile Include="vrikinterface001.cpp" />
+    <ClCompile Include="Helper.cpp" />
+    <ClCompile Include="WeaponGrabLogger.cpp" />
+    <ClCompile Include="WeaponGrabActivator.cpp" />
+    <ClCompile Include="WeaponDrawHandler.cpp" />
+    <ClCompile Include="TriggerHoldLogger.cpp" />
+    <ClCompile Include="OppositeHandGrabLogger.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Utility.hpp" />
+    <ClInclude Include="Engine.h" />
+    <ClInclude Include="dirent.h" />
+    <ClInclude Include="config.h" />
+    <ClInclude Include="higgsinterface001.h" />
+    <ClInclude Include="spellwheelinterface001.h" />
+    <ClInclude Include="SkyrimVRESLAPI.h" />
+    <ClInclude Include="vrikinterface001.h" />
+    <ClInclude Include="Helper.h" />
+    <ClInclude Include="WeaponGrabLogger.h" />
+    <ClInclude Include="WeaponGrabActivator.h" />
+    <ClInclude Include="TrackedWeapons.h" />
+    <ClInclude Include="WeaponDrawHandler.h" />
+    <ClInclude Include="TriggerHoldLogger.h" />
+    <ClInclude Include="OppositeHandGrabLogger.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="SwapDropAndHoldRedux.def" />
+  </ItemGroup>
+</Project>
