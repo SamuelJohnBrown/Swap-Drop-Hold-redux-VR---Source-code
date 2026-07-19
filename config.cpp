@@ -8,6 +8,7 @@ namespace SwapDropAndHoldRedux {
 	float dropGuardTimeoutSeconds = 4.0f;
 	float swapPullSpeedThreshold = 40.0f;
 	float swapPullMinDistanceGrowth = 10.0f;
+	bool enableTwoHandedWeapons = false;
 
     void loadConfig() 
     {
@@ -103,10 +104,19 @@ namespace SwapDropAndHoldRedux {
                                 swapPullMinDistanceGrowth = 100.0f;
                             }
                         }
+                        else if (variableName == "EnableTwoHandedWeapons")
+                        {
+                            enableTwoHandedWeapons =
+                                variableValueStr == "1" ||
+                                variableValueStr == "true" ||
+                                variableValueStr == "True";
+                        }
                     }                    
                 } 
             }
-            _MESSAGE("Config file is loaded successfully.");
+            _MESSAGE(
+                "Config file is loaded successfully (EnableTwoHandedWeapons=%s).",
+                enableTwoHandedWeapons ? "true" : "false");
             return;
         }
         return;

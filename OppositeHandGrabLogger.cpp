@@ -65,37 +65,6 @@ namespace SwapDropAndHoldRedux
 			return isLeftVRController;
 		}
 
-		const char* GetTrackedWeaponTypeLabel(const UInt8 weaponType)
-		{
-			using WeaponType = TESObjectWEAP::GameData;
-
-			switch (weaponType)
-			{
-			case WeaponType::kType_OneHandSword:
-			case WeaponType::kType_1HS:
-				return "1H Sword";
-
-			case WeaponType::kType_OneHandDagger:
-			case WeaponType::kType_1HD:
-				return "Dagger";
-
-			case WeaponType::kType_OneHandAxe:
-			case WeaponType::kType_1HA:
-				return "1H Axe";
-
-			case WeaponType::kType_OneHandMace:
-			case WeaponType::kType_1HM:
-				return "1H Mace";
-
-			case WeaponType::kType_Staff:
-			case WeaponType::kType_Staff2:
-				return "Staff";
-
-			default:
-				return nullptr;
-			}
-		}
-
 		NiPoint3 GetEquippedHandWorldPosition(PlayerCharacter* player, const bool isLeftEquippedHand)
 		{
 			NiPoint3 handPos = player->pos;
@@ -875,8 +844,18 @@ namespace SwapDropAndHoldRedux
 				return;
 			}
 
-			const bool isLeftEquippedHand = !VRControllerToGameHand(isLeftGrabController);
+			bool isLeftEquippedHand = !VRControllerToGameHand(isLeftGrabController);
 			TESForm* equipped = player->GetEquippedObject(isLeftEquippedHand);
+			if ((!equipped || !IsTrackedWeaponForm(equipped)) && enableTwoHandedWeapons)
+			{
+				const bool otherHand = !isLeftEquippedHand;
+				TESForm* otherEquipped = player->GetEquippedObject(otherHand);
+				if (IsTwoHandedWeaponForm(otherEquipped))
+				{
+					equipped = otherEquipped;
+					isLeftEquippedHand = otherHand;
+				}
+			}
 			if (!equipped || !IsTrackedWeaponForm(equipped))
 			{
 				return;

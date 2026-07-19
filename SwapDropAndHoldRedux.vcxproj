@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|x64">
@@ -133,6 +133,7 @@
     <ClCompile Include="WeaponGrabLogger.cpp" />
     <ClCompile Include="WeaponGrabActivator.cpp" />
     <ClCompile Include="WeaponDrawHandler.cpp" />
+    <ClCompile Include="swapdropandholdreduxinterface001.cpp" />
     <ClCompile Include="TriggerHoldLogger.cpp" />
     <ClCompile Include="OppositeHandGrabLogger.cpp" />
   </ItemGroup>
@@ -161,6 +162,7 @@
     <ClInclude Include="WeaponGrabActivator.h" />
     <ClInclude Include="TrackedWeapons.h" />
     <ClInclude Include="WeaponDrawHandler.h" />
+    <ClInclude Include="swapdropandholdreduxinterface001.h" />
     <ClInclude Include="TriggerHoldLogger.h" />
     <ClInclude Include="OppositeHandGrabLogger.h" />
   </ItemGroup>

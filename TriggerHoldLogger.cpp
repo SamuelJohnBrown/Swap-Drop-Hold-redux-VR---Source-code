@@ -4,6 +4,7 @@
 #include "Helper.h"
 #include "TrackedWeapons.h"
 #include "config.h"
+#include "swapdropandholdreduxinterface001.h"
 
 #include <skse64/GameData.h>
 #include <skse64/GameExtraData.h>
@@ -22,7 +23,6 @@ namespace SwapDropAndHoldRedux
 	{
 		static const uint64_t TRIGGER_BUTTON_MASK = (1ull << 33);
 		static const uint64_t GRIP_BUTTON_MASK = (1ull << 2);
-		static RelocPtr<bool> s_leftHandedMode(0x01E71778);
 
 		struct HandTriggerState
 		{
@@ -36,6 +36,7 @@ namespace SwapDropAndHoldRedux
 
 		static HandTriggerState s_leftTriggerState;
 		static HandTriggerState s_rightTriggerState;
+		static HandTriggerState s_twoHandSharedTriggerState;
 		static bool s_registered = false;
 
 		struct HandDropGuardState
@@ -94,16 +95,6 @@ namespace SwapDropAndHoldRedux
 				guard.droppedRefFormID = 0;
 				guard.secondsRemaining = 0.0f;
 			}
-		}
-
-		bool VRControllerToGameHand(const bool isLeftVRController)
-		{
-			if (s_leftHandedMode && *s_leftHandedMode)
-			{
-				return !isLeftVRController;
-			}
-
-			return isLeftVRController;
 		}
 
 		bool GetControllerState(const bool isLeftVRController, vr_1_0_12::VRControllerState_t& outState)
@@ -168,7 +159,23 @@ namespace SwapDropAndHoldRedux
 			return spellwheelInterface->IsMainWheelOpen() || spellwheelInterface->IsSecondaryWheelOpen();
 		}
 
-		bool IsDropBlockedForHand(const bool isLeftVRController)
+		bool IsGripBlockingTriggerDrop(TESForm* weapon, const bool gripActive, const bool triggerPressed)
+		{
+			if (!gripActive || !triggerPressed)
+			{
+				return false;
+			}
+
+			// 2H weapons are gripped with both hands in VR; allow trigger-hold drop while gripping.
+			if (IsTwoHandedWeaponForm(weapon))
+			{
+				return false;
+			}
+
+			return true;
+		}
+
+		bool IsDropBlockedForHand(const bool isLeftVRController, TESForm* weapon)
 		{
 			if (IsSpellWheelOpenNow())
 			{
@@ -176,7 +183,7 @@ namespace SwapDropAndHoldRedux
 			}
 
 			const HandTriggerState& state = GetHandTriggerState(isLeftVRController);
-			if (state.spellWheelBlocked)
+			if (state.spellWheelBlocked && !IsTwoHandedWeaponForm(weapon))
 			{
 				return true;
 			}
@@ -188,7 +195,7 @@ namespace SwapDropAndHoldRedux
 				return false;
 			}
 
-			return triggerPressed && gripActive;
+			return IsGripBlockingTriggerDrop(weapon, gripActive, triggerPressed);
 		}
 
 		NiPoint3 GetHandSpawnPosition(PlayerCharacter* player, const bool isLeftGameHand)
@@ -218,24 +225,62 @@ namespace SwapDropAndHoldRedux
 			return spawnPos;
 		}
 
-		bool UnequipAndGrabWeapon(PlayerCharacter* player, const bool isLeftGameHand, const UInt32 expectedWeaponFormID)
+		bool ResolveTrackedWeaponGameHand(
+			PlayerCharacter* player,
+			const UInt32 expectedWeaponFormID,
+			bool& outIsLeftGameHand,
+			TESForm*& outWeapon)
 		{
-			if (!player || !higgsInterface || expectedWeaponFormID == 0)
+			outWeapon = nullptr;
+
+			if (!player || expectedWeaponFormID == 0)
 			{
 				return false;
 			}
 
 			TESForm* leftEquipped = player->GetEquippedObject(true);
 			TESForm* rightEquipped = player->GetEquippedObject(false);
-			TESForm* item = isLeftGameHand ? leftEquipped : rightEquipped;
 
-			if (!item || item->formID != expectedWeaponFormID || !IsTrackedWeaponForm(item))
+			if (leftEquipped && leftEquipped->formID == expectedWeaponFormID && IsTrackedWeaponForm(leftEquipped))
+			{
+				outWeapon = leftEquipped;
+				outIsLeftGameHand = true;
+				return true;
+			}
+
+			if (rightEquipped && rightEquipped->formID == expectedWeaponFormID && IsTrackedWeaponForm(rightEquipped))
+			{
+				outWeapon = rightEquipped;
+				outIsLeftGameHand = false;
+				return true;
+			}
+
+			return false;
+		}
+
+		bool UnequipAndGrabWeapon(
+			PlayerCharacter* player,
+			const bool isLeftGameHand,
+			const bool isLeftVRController,
+			const UInt32 expectedWeaponFormID)
+		{
+			if (!player || !higgsInterface || expectedWeaponFormID == 0)
 			{
 				return false;
 			}
 
+			TESForm* item = nullptr;
+			bool resolvedLeftGameHand = isLeftGameHand;
+			if (!ResolveTrackedWeaponGameHand(player, expectedWeaponFormID, resolvedLeftGameHand, item))
+			{
+				return false;
+			}
+
+			TESForm* leftEquipped = player->GetEquippedObject(true);
+			TESForm* rightEquipped = player->GetEquippedObject(false);
 			const bool bothHandsSameWeapon = leftEquipped && rightEquipped &&
 				leftEquipped->formID == rightEquipped->formID;
+			const bool isTwoHandedDrop = IsTwoHandedWeaponForm(item);
 
 			::EquipManager* equipManager = ::EquipManager::GetSingleton();
 			if (!equipManager)
@@ -261,8 +306,24 @@ namespace SwapDropAndHoldRedux
 			BaseExtraList* leftEquipList = nullptr;
 			entryData->GetExtraWornBaseLists(&rightEquipList, &leftEquipList);
 
-			BaseExtraList* equipList = isLeftGameHand ? leftEquipList : rightEquipList;
-			BGSEquipSlot* equipSlot = isLeftGameHand ? GetLeftHandSlot() : GetRightHandSlot();
+			BaseExtraList* equipList = resolvedLeftGameHand ? leftEquipList : rightEquipList;
+			BGSEquipSlot* equipSlot = resolvedLeftGameHand ? GetLeftHandSlot() : GetRightHandSlot();
+			if (!equipList)
+			{
+				if (rightEquipList)
+				{
+					equipList = rightEquipList;
+					equipSlot = GetRightHandSlot();
+					resolvedLeftGameHand = false;
+				}
+				else if (leftEquipList)
+				{
+					equipList = leftEquipList;
+					equipSlot = GetLeftHandSlot();
+					resolvedLeftGameHand = true;
+				}
+			}
+
 			if (!equipList || !equipSlot)
 			{
 				LOG_ERR("Trigger hold drop failed: could not resolve equip data for formId=%08X", item->formID);
@@ -278,7 +339,7 @@ namespace SwapDropAndHoldRedux
 			CALL_MEMBER_FN(equipManager, UnequipItem)(
 				player, item, equipList, 1, equipSlot, false, true, true, false, nullptr);
 
-			const NiPoint3 spawnPos = GetHandSpawnPosition(player, isLeftGameHand);
+			const NiPoint3 spawnPos = GetHandSpawnPosition(player, resolvedLeftGameHand);
 			TESObjectREFR* droppedWeapon = PlaceAtMe_Native(nullptr, 0, player, item, 1, false, false);
 			if (!droppedWeapon)
 			{
@@ -295,21 +356,29 @@ namespace SwapDropAndHoldRedux
 
 			SetOwnerToPlayer(droppedWeapon);
 
-			if (!bothHandsSameWeapon)
+			if (!bothHandsSameWeapon || isTwoHandedDrop)
 			{
 				RemoveItemFromInventory(player, item, 1, true);
 			}
 
-			const bool isLeftVRController = GameHandToVRController(isLeftGameHand);
 			MarkTriggerHoldDroppedGrab(isLeftVRController, droppedWeapon->formID);
 			higgsInterface->GrabObject(droppedWeapon, isLeftVRController);
 
 			LOG_INFO(
 				"Trigger hold drop [%s hand]: unequipped, removed from inventory, grabbed world model %s formId=%08X refId=%08X",
-				isLeftGameHand ? "left" : "right",
+				resolvedLeftGameHand ? "left" : "right",
 				GetSafeFormName(item),
 				item->formID,
 				droppedWeapon->formID);
+
+			SwapDropAndHoldReduxAPI::WeaponHandEvent event{};
+			event.eventType = SwapDropAndHoldReduxAPI::kTriggerHoldDropped;
+			event.isLeftGameHand = resolvedLeftGameHand;
+			event.isLeftVRController = isLeftVRController;
+			event.sourceIsLeftGameHand = resolvedLeftGameHand;
+			event.weaponFormID = item->formID;
+			event.weaponRefID = droppedWeapon->formID;
+			SwapDropAndHoldReduxAPI::NotifyTriggerHoldDropped(event);
 
 			return true;
 		}
@@ -329,7 +398,8 @@ namespace SwapDropAndHoldRedux
 
 			virtual void Run() override
 			{
-				if (IsDropBlockedForHand(m_isLeftVRController))
+				TESForm* weaponForm = LookupFormByID(m_weaponFormID);
+				if (IsDropBlockedForHand(m_isLeftVRController, weaponForm))
 				{
 					return;
 				}
@@ -340,7 +410,7 @@ namespace SwapDropAndHoldRedux
 					return;
 				}
 
-				UnequipAndGrabWeapon(player, m_isLeftGameHand, m_weaponFormID);
+				UnequipAndGrabWeapon(player, m_isLeftGameHand, m_isLeftVRController, m_weaponFormID);
 			}
 
 			virtual void Dispose() override
@@ -354,20 +424,119 @@ namespace SwapDropAndHoldRedux
 			UInt32 m_weaponFormID;
 		};
 
-		void QueueTriggerHoldDrop(const bool isLeftGameHand, const UInt32 weaponFormID)
+		void QueueTriggerHoldDrop(
+			const bool isLeftGameHand,
+			const bool isLeftVRController,
+			const UInt32 weaponFormID)
 		{
 			if (!g_task || weaponFormID == 0)
 			{
 				return;
 			}
 
-			const bool isLeftVRController = GameHandToVRController(isLeftGameHand);
-			if (IsDropBlockedForHand(isLeftVRController))
+			TESForm* weaponForm = LookupFormByID(weaponFormID);
+			if (IsDropBlockedForHand(isLeftVRController, weaponForm))
 			{
 				return;
 			}
 
 			g_task->AddTask(new TriggerHoldDropTask(isLeftGameHand, isLeftVRController, weaponFormID));
+		}
+
+		bool HasTwoHandedWeaponEquipped(PlayerCharacter* player)
+		{
+			if (!player)
+			{
+				return false;
+			}
+
+			return IsTwoHandedWeaponForm(player->GetEquippedObject(true)) ||
+				IsTwoHandedWeaponForm(player->GetEquippedObject(false));
+		}
+
+		bool UpdateTwoHandedTriggerHoldState(PlayerCharacter* player, const float deltaTime)
+		{
+			TESForm* leftEquipped = player->GetEquippedObject(true);
+			TESForm* rightEquipped = player->GetEquippedObject(false);
+			TESForm* weapon = nullptr;
+			bool isLeftGameHand = false;
+
+			if (IsTwoHandedWeaponForm(leftEquipped))
+			{
+				weapon = leftEquipped;
+				isLeftGameHand = true;
+			}
+			else if (IsTwoHandedWeaponForm(rightEquipped))
+			{
+				weapon = rightEquipped;
+				isLeftGameHand = false;
+			}
+			else
+			{
+				return false;
+			}
+
+			bool leftTrigger = false;
+			bool leftGrip = false;
+			bool rightTrigger = false;
+			bool rightGrip = false;
+			ReadControllerInput(true, leftTrigger, leftGrip);
+			ReadControllerInput(false, rightTrigger, rightGrip);
+
+			HandTriggerState& activeState = s_twoHandSharedTriggerState;
+			const bool anyTrigger = leftTrigger || rightTrigger;
+
+			if (!anyTrigger)
+			{
+				activeState.holdTime = 0.0f;
+				activeState.actionedThisHold = false;
+				activeState.spellWheelBlocked = false;
+				activeState.wasPressed = false;
+				activeState.wasGripActive = leftGrip || rightGrip;
+				activeState.gripHeldBeforeTrigger = activeState.wasGripActive;
+				return true;
+			}
+
+			bool dropLeftVR = leftTrigger;
+			if (leftTrigger && rightTrigger)
+			{
+				dropLeftVR = GameHandToVRController(isLeftGameHand);
+			}
+			else if (!leftTrigger)
+			{
+				dropLeftVR = false;
+			}
+
+			if (IsSpellWheelOpenNow())
+			{
+				activeState.holdTime = 0.0f;
+				activeState.actionedThisHold = false;
+				activeState.wasPressed = anyTrigger;
+				activeState.wasGripActive = leftGrip || rightGrip;
+				return true;
+			}
+
+			const bool blockDrop = activeState.spellWheelBlocked ||
+				IsGripBlockingTriggerDrop(weapon, leftGrip && leftTrigger, leftTrigger) ||
+				IsGripBlockingTriggerDrop(weapon, rightGrip && rightTrigger, rightTrigger);
+			if (blockDrop)
+			{
+				activeState.holdTime = 0.0f;
+			}
+			else
+			{
+				activeState.holdTime += deltaTime;
+
+				if (!activeState.actionedThisHold && activeState.holdTime >= triggerHoldDropSeconds)
+				{
+					QueueTriggerHoldDrop(isLeftGameHand, dropLeftVR, weapon->formID);
+					activeState.actionedThisHold = true;
+				}
+			}
+
+			activeState.wasPressed = anyTrigger;
+			activeState.wasGripActive = leftGrip || rightGrip;
+			return true;
 		}
 
 		void UpdateHandTriggerState(const bool isLeftVRController, HandTriggerState& state, const float deltaTime)
@@ -384,8 +553,14 @@ namespace SwapDropAndHoldRedux
 				return;
 			}
 
-			const bool isLeftGameHand = VRControllerToGameHand(isLeftVRController);
-			TESForm* equipped = player->GetEquippedObject(isLeftGameHand);
+			if (HasTwoHandedWeaponEquipped(player))
+			{
+				return;
+			}
+
+			const TrackedWeaponHandInfo tracked = GetTrackedWeaponForVRController(player, isLeftVRController);
+			TESForm* equipped = tracked.weapon;
+			HandTriggerState& activeState = state;
 
 			bool triggerPressed = false;
 			bool gripActive = false;
@@ -393,79 +568,85 @@ namespace SwapDropAndHoldRedux
 
 			if (!triggerPressed)
 			{
-				state.gripHeldBeforeTrigger = gripActive;
+				activeState.gripHeldBeforeTrigger = gripActive;
 			}
 
-			if (!IsTrackedWeaponForm(equipped))
+			if (!equipped)
 			{
-				state.holdTime = 0.0f;
-				state.actionedThisHold = false;
-				state.spellWheelBlocked = false;
-				state.wasPressed = triggerPressed;
-				state.wasGripActive = gripActive;
+				activeState.holdTime = 0.0f;
+				activeState.actionedThisHold = false;
+				activeState.spellWheelBlocked = false;
+				activeState.wasPressed = triggerPressed;
+				activeState.wasGripActive = gripActive;
 				return;
 			}
 
+			const bool isLeftGameHand = tracked.isLeftGameHand;
 			const UInt32 weaponFormID = equipped->formID;
 
 			if (!triggerPressed)
 			{
-				state.holdTime = 0.0f;
-				state.actionedThisHold = false;
-				state.spellWheelBlocked = false;
-				state.wasPressed = false;
-				state.wasGripActive = gripActive;
+				activeState.holdTime = 0.0f;
+				activeState.actionedThisHold = false;
+				activeState.spellWheelBlocked = false;
+				activeState.wasPressed = false;
+				activeState.wasGripActive = gripActive;
 				return;
 			}
 
 			if (IsSpellWheelOpenNow())
 			{
-				state.holdTime = 0.0f;
-				state.actionedThisHold = false;
-				state.wasPressed = triggerPressed;
-				state.wasGripActive = gripActive;
+				activeState.holdTime = 0.0f;
+				activeState.actionedThisHold = false;
+				activeState.wasPressed = triggerPressed;
+				activeState.wasGripActive = gripActive;
 				return;
 			}
 
-			if (!state.wasPressed)
+			if (!activeState.wasPressed)
 			{
-				state.holdTime = 0.0f;
-				state.actionedThisHold = false;
-				if (state.gripHeldBeforeTrigger || gripActive)
+				activeState.holdTime = 0.0f;
+				activeState.actionedThisHold = false;
+				if (!IsTwoHandedWeaponForm(equipped) &&
+					(activeState.gripHeldBeforeTrigger || gripActive))
 				{
-					state.spellWheelBlocked = true;
+					activeState.spellWheelBlocked = true;
 				}
 			}
 
-			if (gripActive && !state.wasGripActive && state.wasPressed && state.gripHeldBeforeTrigger)
+			if (gripActive && !activeState.wasGripActive && activeState.wasPressed && activeState.gripHeldBeforeTrigger)
 			{
-				state.spellWheelBlocked = true;
+				if (!IsTwoHandedWeaponForm(equipped))
+				{
+					activeState.spellWheelBlocked = true;
+				}
 			}
 
-			if (gripActive && !state.wasGripActive && state.wasPressed && !state.gripHeldBeforeTrigger)
+			if (gripActive && !activeState.wasGripActive && activeState.wasPressed && !activeState.gripHeldBeforeTrigger)
 			{
-				state.holdTime = 0.0f;
-				state.actionedThisHold = false;
+				activeState.holdTime = 0.0f;
+				activeState.actionedThisHold = false;
 			}
 
-			const bool blockDrop = state.spellWheelBlocked || (gripActive && triggerPressed);
+			const bool blockDrop = activeState.spellWheelBlocked ||
+				IsGripBlockingTriggerDrop(equipped, gripActive, triggerPressed);
 			if (blockDrop)
 			{
-				state.holdTime = 0.0f;
+				activeState.holdTime = 0.0f;
 			}
 			else
 			{
-				state.holdTime += deltaTime;
+				activeState.holdTime += deltaTime;
 
-				if (!state.actionedThisHold && state.holdTime >= triggerHoldDropSeconds)
+				if (!activeState.actionedThisHold && activeState.holdTime >= triggerHoldDropSeconds)
 				{
-					QueueTriggerHoldDrop(isLeftGameHand, weaponFormID);
-					state.actionedThisHold = true;
+					QueueTriggerHoldDrop(isLeftGameHand, isLeftVRController, weaponFormID);
+					activeState.actionedThisHold = true;
 				}
 			}
 
-			state.wasPressed = triggerPressed;
-			state.wasGripActive = gripActive;
+			activeState.wasPressed = triggerPressed;
+			activeState.wasGripActive = gripActive;
 		}
 
 		void OnPrePhysicsStep(void* /*world*/)
@@ -484,8 +665,12 @@ namespace SwapDropAndHoldRedux
 				deltaTime = 0.0001f;
 			}
 
-			UpdateHandTriggerState(true, s_leftTriggerState, deltaTime);
-			UpdateHandTriggerState(false, s_rightTriggerState, deltaTime);
+			PlayerCharacter* player = *g_thePlayer;
+			if (player && !UpdateTwoHandedTriggerHoldState(player, deltaTime))
+			{
+				UpdateHandTriggerState(true, s_leftTriggerState, deltaTime);
+				UpdateHandTriggerState(false, s_rightTriggerState, deltaTime);
+			}
 
 			UpdateDropGuardTimer(s_leftDropGuard, deltaTime);
 			UpdateDropGuardTimer(s_rightDropGuard, deltaTime);
@@ -509,8 +694,9 @@ namespace SwapDropAndHoldRedux
 		higgsInterface->AddDroppedCallback(OnTriggerHoldWeaponDropped);
 		s_registered = true;
 		LOG_INFO(
-			"Trigger hold drop registered (%.2fs hold from ini, grip/spell wheel orb block drop).",
-			triggerHoldDropSeconds);
+			"Trigger hold drop registered (%.2fs hold from ini, grip/spell wheel orb block drop%s).",
+			triggerHoldDropSeconds,
+			enableTwoHandedWeapons ? ", 2H weapons enabled" : "");
 	}
 
 	bool ShouldSuppressGrabAutoEquip(const bool isLeftVRController, TESObjectREFR* grabbedRefr)

@@ -32,6 +32,7 @@ namespace SwapDropAndHoldRedux {
 	extern float dropGuardTimeoutSeconds;
 	extern float swapPullSpeedThreshold;
 	extern float swapPullMinDistanceGrowth;
+	extern bool enableTwoHandedWeapons;
 
 	void loadConfig();
 	

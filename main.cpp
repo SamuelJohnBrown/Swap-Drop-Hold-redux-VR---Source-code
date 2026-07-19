@@ -11,6 +11,7 @@
 #include "TriggerHoldLogger.h"
 #include "OppositeHandGrabLogger.h"
 #include "config.h"
+#include "swapdropandholdreduxinterface001.h"
 
 #include "skse64_common/BranchTrampoline.h"
 
@@ -48,7 +49,7 @@ namespace SwapDropAndHoldRedux
 
 			// populate info structure
 			info->infoVersion = PluginInfo::kInfoVersion;
-			info->name = PLUGIN_DISPLAY_NAME;
+			info->name = PLUGIN_FILE_NAME;
 			info->version = SwapDropAndHoldRedux::MOD_VERSION;
 
 			// store plugin handle so we can identify ourselves later
@@ -98,6 +99,7 @@ namespace SwapDropAndHoldRedux
 					SetupReceptors();
 				else if (msg->type == SKSEMessagingInterface::kMessage_DataLoaded)
 				{
+					SwapDropAndHoldReduxAPI::RegisterSwapDropAndHoldReduxInterface(g_pluginHandle, g_messaging);
 					SwapDropAndHoldRedux::loadConfig();
 
 					// NEW SKSEVR feature: trampoline interface object from QueryInterface() - Use SKSE existing process code memory pool - allow Skyrim to run without ASLR
@@ -144,6 +146,8 @@ namespace SwapDropAndHoldRedux
 				}
 				else if (msg->type == SKSEMessagingInterface::kMessage_PostPostLoad)
 				{
+					SwapDropAndHoldReduxAPI::RegisterSwapDropAndHoldReduxInterface(g_pluginHandle, g_messaging);
+
 					higgsInterface = HiggsPluginAPI::GetHiggsInterface001(g_pluginHandle, g_messaging);
 					if (higgsInterface)
 					{

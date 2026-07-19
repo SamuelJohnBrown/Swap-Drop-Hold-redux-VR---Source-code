@@ -6,18 +6,11 @@
 
 #include <skse64/PapyrusActor.h>
 #include <skse64/PapyrusEvents.h>
-#include <skse64/gamethreads.h>
 
 namespace SwapDropAndHoldRedux
 {
-	extern SKSETaskInterface* g_task;
-
 	namespace
 	{
-		static const int kDrawMaintenanceFrames = 45;
-		static const int kLeftHandDrawBurstFrames = 90;
-		static int s_leftHandDrawBurstFramesRemaining = 0;
-
 		bool HasTrackedWeaponEquipped(PlayerCharacter* player)
 		{
 			if (!player)
@@ -30,90 +23,49 @@ namespace SwapDropAndHoldRedux
 			return IsTrackedWeaponForm(leftEquipped) || IsTrackedWeaponForm(rightEquipped);
 		}
 
-		bool HasTrackedWeaponOnLeftHandOnly(PlayerCharacter* player)
+		bool ShouldAllowDrawRefresh(PlayerCharacter* player)
 		{
 			if (!player)
 			{
 				return false;
 			}
 
-			TESForm* leftEquipped = player->GetEquippedObject(true);
-			TESForm* rightEquipped = player->GetEquippedObject(false);
-			return IsTrackedWeaponForm(leftEquipped) && !IsTrackedWeaponForm(rightEquipped);
+			const UInt32 movementFlags = player->actorState.flags04;
+			if (movementFlags & ActorState::kState_Sneaking)
+			{
+				return false;
+			}
+
+			if (movementFlags & ActorState::kState_Swimming)
+			{
+				return false;
+			}
+
+			return true;
 		}
 
-		void ForceWeaponDrawRefresh(PlayerCharacter* player)
+		void EnsureWeaponDrawn(PlayerCharacter* player)
 		{
 			if (!player)
 			{
 				return;
 			}
 
-			if (player->actorState.IsWeaponDrawn())
+			if (!player->actorState.IsWeaponDrawn())
 			{
-				player->DrawSheatheWeapon(false);
+				player->DrawSheatheWeapon(true);
 			}
-
-			player->DrawSheatheWeapon(true);
-			papyrusActor::QueueNiNodeUpdate(player);
 		}
-
-		class MaintainWeaponDrawTask : public TaskDelegate
-		{
-		public:
-			explicit MaintainWeaponDrawTask(const int framesRemaining = kDrawMaintenanceFrames)
-				: m_framesRemaining(framesRemaining)
-			{
-			}
-
-			virtual void Run() override
-			{
-				PlayerCharacter* player = *g_thePlayer;
-				if (!player || !HasTrackedWeaponEquipped(player))
-				{
-					return;
-				}
-
-				RedrawTrackedEquippedWeapons(s_leftHandDrawBurstFramesRemaining > 0);
-
-				if (m_framesRemaining > 0 && g_task)
-				{
-					g_task->AddTask(new MaintainWeaponDrawTask(m_framesRemaining - 1));
-				}
-			}
-
-			virtual void Dispose() override
-			{
-				delete this;
-			}
-
-		private:
-			int m_framesRemaining;
-		};
 
 		class WeaponSheatheEventHandler : public BSTEventSink<SKSEActionEvent>
 		{
 		public:
 			virtual EventResult ReceiveEvent(SKSEActionEvent* evn, EventDispatcher<SKSEActionEvent>* dispatcher) override
 			{
-				if (!evn || !evn->actor || evn->actor != *g_thePlayer)
-				{
-					return kEvent_Continue;
-				}
-
-				if (evn->type != SKSEActionEvent::kType_BeginSheathe &&
-					evn->type != SKSEActionEvent::kType_EndSheathe)
-				{
-					return kEvent_Continue;
-				}
-
-				PlayerCharacter* player = *g_thePlayer;
-				if (!player || !HasTrackedWeaponEquipped(player))
-				{
-					return kEvent_Continue;
-				}
-
-				RedrawTrackedEquippedWeapons(HasTrackedWeaponOnLeftHandOnly(player));
+				// Never re-enter draw/sheathe from sheath events — that blocks sneak/jump
+				// and can spam equip audio when dual-wielding.
+				(void)evn;
+				(void)dispatcher;
 				return kEvent_Continue;
 			}
 
@@ -126,91 +78,40 @@ namespace SwapDropAndHoldRedux
 		private:
 			WeaponSheatheEventHandler() = default;
 		};
-
-		void MaintainTrackedWeaponDrawState()
-		{
-			PlayerCharacter* player = *g_thePlayer;
-			if (!player || !HasTrackedWeaponEquipped(player))
-			{
-				s_leftHandDrawBurstFramesRemaining = 0;
-				return;
-			}
-
-			if (s_leftHandDrawBurstFramesRemaining > 0)
-			{
-				s_leftHandDrawBurstFramesRemaining--;
-				ForceWeaponDrawRefresh(player);
-				return;
-			}
-
-			if (!player->actorState.IsWeaponDrawn())
-			{
-				player->DrawSheatheWeapon(true);
-				return;
-			}
-
-			if (HasTrackedWeaponOnLeftHandOnly(player))
-			{
-				papyrusActor::QueueNiNodeUpdate(player);
-			}
-		}
-
-		void OnPostVrikPostHiggs()
-		{
-			MaintainTrackedWeaponDrawState();
-		}
 	}
 
 	void RedrawTrackedEquippedWeapons(const bool forceRefresh)
 	{
 		PlayerCharacter* player = *g_thePlayer;
-		if (!player || !HasTrackedWeaponEquipped(player))
+		if (!player || !HasTrackedWeaponEquipped(player) || !ShouldAllowDrawRefresh(player))
 		{
 			return;
 		}
+
+		EnsureWeaponDrawn(player);
 
 		if (forceRefresh)
 		{
-			ForceWeaponDrawRefresh(player);
-			return;
-		}
-
-		if (!player->actorState.IsWeaponDrawn())
-		{
-			player->DrawSheatheWeapon(true);
+			papyrusActor::QueueNiNodeUpdate(player);
 		}
 	}
 
-	void ScheduleWeaponDrawMaintenance(const bool isLeftGameHand)
+	void ScheduleWeaponDrawMaintenance(const bool isLeftGameHand, const bool forTwoHandedWeapon)
 	{
-		if (isLeftGameHand)
-		{
-			s_leftHandDrawBurstFramesRemaining = kLeftHandDrawBurstFrames;
-		}
-
-		if (!g_task)
-		{
-			RedrawTrackedEquippedWeapons(isLeftGameHand);
-			return;
-		}
-
+		// One-shot only. Multi-frame draw/sheathe upkeep blocks sneak/jump for seconds
+		// after grab-equip and causes equip SFX spam when dual-wielding.
+		(void)forTwoHandedWeapon;
 		RedrawTrackedEquippedWeapons(isLeftGameHand);
-		g_task->AddTask(new MaintainWeaponDrawTask());
 	}
 
 	void RegisterWeaponDrawHandler()
 	{
 		g_actionEventDispatcher.AddEventSink(WeaponSheatheEventHandler::GetSingleton());
-		LOG_INFO("Weapon draw handler registered (auto-redraw on sheath).");
+		LOG_INFO("Weapon draw handler registered (one-shot redraw after equip/swap).");
 	}
 
 	void RegisterWeaponDrawHiggsCallback()
 	{
-		if (!higgsInterface)
-		{
-			return;
-		}
-
-		higgsInterface->AddPostVrikPostHiggsCallback(OnPostVrikPostHiggs);
+		// No continuous HIGGS draw upkeep — that was locking sneak/jump after equip.
 	}
 }

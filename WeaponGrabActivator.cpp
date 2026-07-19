@@ -2,8 +2,10 @@
 #include "WeaponDrawHandler.h"
 
 #include "Engine.h"
+#include "Helper.h"
 #include "TrackedWeapons.h"
 #include "config.h"
+#include "swapdropandholdreduxinterface001.h"
 
 #include <skse64/GameObjects.h>
 #include <skse64/GameData.h>
@@ -102,32 +104,6 @@ namespace SwapDropAndHoldRedux
 			}
 
 			return RefActivate(grabbedRefr, player, 0, 0, 1, false);
-		}
-
-		const char* GetTrackedWeaponTypeLabel(const UInt8 weaponType)
-		{
-			using WeaponType = TESObjectWEAP::GameData;
-
-			switch (weaponType)
-			{
-			case WeaponType::kType_OneHandSword:
-			case WeaponType::kType_1HS:
-				return "1H Sword";
-			case WeaponType::kType_OneHandDagger:
-			case WeaponType::kType_1HD:
-				return "Dagger";
-			case WeaponType::kType_OneHandAxe:
-			case WeaponType::kType_1HA:
-				return "1H Axe";
-			case WeaponType::kType_OneHandMace:
-			case WeaponType::kType_1HM:
-				return "1H Mace";
-			case WeaponType::kType_Staff:
-			case WeaponType::kType_Staff2:
-				return "Staff";
-			default:
-				return nullptr;
-			}
 		}
 
 		static const int kSwapPullSettleFrames = 8;
@@ -393,14 +369,41 @@ namespace SwapDropAndHoldRedux
 					return;
 				}
 
+				SwapDropAndHoldReduxAPI::WeaponHandEvent event{};
+				event.eventType = SwapDropAndHoldReduxAPI::kWeaponGrabEquipped;
+				event.isLeftGameHand = m_isLeftGameHand;
+				event.isLeftVRController = GameHandToVRController(m_isLeftGameHand);
+				event.sourceIsLeftGameHand = m_isLeftGameHand;
+				event.weaponFormID = m_weaponFormID;
+				if (higgsInterface)
+				{
+					TESObjectREFR* grabbedRefr = higgsInterface->GetGrabbedObject(event.isLeftVRController);
+					if (grabbedRefr)
+					{
+						event.weaponRefID = grabbedRefr->formID;
+					}
+				}
+
+				if (SwapDropAndHoldReduxAPI::QueryWeaponGrabEquipIntercept(event))
+				{
+					LOG_INFO(
+						"Grab equip intercepted by mod API (skipped default equip): %s formId=%08X",
+						GetSafeFormName(weaponForm),
+						m_weaponFormID);
+					SwapDropAndHoldReduxAPI::NotifyWeaponGrabEquipped(event);
+					return;
+				}
+
 				EquipWeaponToGrabHand(player, weaponForm, m_isLeftGameHand);
-				ScheduleWeaponDrawMaintenance(m_isLeftGameHand);
+				ScheduleWeaponDrawMaintenance(m_isLeftGameHand, IsTwoHandedWeaponForm(weaponForm));
 
 				LOG_INFO(
 					"Weapon equipped to %s hand: %s formId=%08X",
 					m_isLeftGameHand ? "left" : "right",
 					GetSafeFormName(weaponForm),
 					m_weaponFormID);
+
+				SwapDropAndHoldReduxAPI::NotifyWeaponGrabEquipped(event);
 			}
 
 			virtual void Dispose() override
@@ -471,6 +474,25 @@ namespace SwapDropAndHoldRedux
 				}
 
 				const bool isLeftDestHand = !m_isLeftSourceHand;
+
+				SwapDropAndHoldReduxAPI::WeaponHandEvent event{};
+				event.eventType = SwapDropAndHoldReduxAPI::kSwapPullComplete;
+				event.isLeftGameHand = isLeftDestHand;
+				event.isLeftVRController = GameHandToVRController(isLeftDestHand);
+				event.sourceIsLeftGameHand = m_isLeftSourceHand;
+				event.weaponFormID = m_weaponFormID;
+				event.pullSpeed = m_pullSpeed;
+
+				if (SwapDropAndHoldReduxAPI::QueryWeaponGrabEquipIntercept(event))
+				{
+					LOG_INFO(
+						"Swap pull intercepted by mod API (skipped default hand transfer): formId=%08X dest=%s hand",
+						m_weaponFormID,
+						isLeftDestHand ? "left" : "right");
+					SwapDropAndHoldReduxAPI::NotifySwapPullComplete(event);
+					return;
+				}
+
 				if (!TransferWeaponToOppositeHand(player, m_isLeftSourceHand, m_weaponFormID))
 				{
 					LOG_ERR(
@@ -480,7 +502,7 @@ namespace SwapDropAndHoldRedux
 					return;
 				}
 
-				ScheduleWeaponDrawMaintenance(isLeftDestHand);
+				ScheduleWeaponDrawMaintenance(isLeftDestHand, IsTwoHandedWeaponForm(weaponForm));
 
 				auto* weapon = DYNAMIC_CAST(weaponForm, TESForm, TESObjectWEAP);
 				const char* typeLabel = weapon ? GetTrackedWeaponTypeLabel(weapon->type()) : nullptr;
@@ -493,6 +515,8 @@ namespace SwapDropAndHoldRedux
 					isLeftDestHand ? "left" : "right",
 					m_weaponFormID,
 					m_pullSpeed);
+
+				SwapDropAndHoldReduxAPI::NotifySwapPullComplete(event);
 			}
 
 			virtual void Dispose() override
