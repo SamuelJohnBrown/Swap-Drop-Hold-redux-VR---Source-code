@@ -147,6 +147,7 @@ namespace SwapDropAndHoldRedux
 				else if (msg->type == SKSEMessagingInterface::kMessage_PostPostLoad)
 				{
 					SwapDropAndHoldReduxAPI::RegisterSwapDropAndHoldReduxInterface(g_pluginHandle, g_messaging);
+					SwapDropAndHoldRedux::InitBitingAxesCompatibility(g_pluginHandle, g_messaging);
 
 					higgsInterface = HiggsPluginAPI::GetHiggsInterface001(g_pluginHandle, g_messaging);
 					if (higgsInterface)

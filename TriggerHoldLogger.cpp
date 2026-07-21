@@ -24,20 +24,87 @@ namespace SwapDropAndHoldRedux
 		static const uint64_t TRIGGER_BUTTON_MASK = (1ull << 33);
 		static const uint64_t GRIP_BUTTON_MASK = (1ull << 2);
 
+		uint64_t ButtonMaskFromId(const int buttonId)
+		{
+			if (buttonId < 0 || buttonId > 63)
+			{
+				return 0;
+			}
+
+			return 1ull << buttonId;
+		}
+
+		bool IsButtonPressedOrTouched(
+			const vr_1_0_12::VRControllerState_t& state,
+			const uint64_t mask)
+		{
+			return ((state.ulButtonPressed & mask) != 0) ||
+				((state.ulButtonTouched & mask) != 0);
+		}
+
+		bool IsConfiguredDropButtonActive(const vr_1_0_12::VRControllerState_t& state)
+		{
+			const uint64_t mask = ButtonMaskFromId(dropButtonId);
+			if (mask == 0)
+			{
+				return false;
+			}
+
+			if (dropButtonId == 33)
+			{
+				return ((state.ulButtonPressed & TRIGGER_BUTTON_MASK) != 0) ||
+					state.rAxis[1].x > 0.5f;
+			}
+
+			if (dropButtonId == 2)
+			{
+				return IsButtonPressedOrTouched(state, GRIP_BUTTON_MASK);
+			}
+
+			return (state.ulButtonPressed & mask) != 0;
+		}
+
 		struct HandTriggerState
 		{
+			enum Phase
+			{
+				kIdle = 0,
+				kTapPressing = 1,   // first press — must release quickly to arm
+				kTapArmed = 2,     // tap completed; waiting for hold press
+				kHoldPressing = 3, // second press — accumulate hold for drop
+			};
+
+			Phase phase = kIdle;
+			float tapPressTime = 0.0f;
+			float tapArmedRemaining = 0.0f;
 			float holdTime = 0.0f;
 			bool actionedThisHold = false;
 			bool wasPressed = false;
-			bool wasGripActive = false;
-			bool gripHeldBeforeTrigger = false;
+			bool wasSecondaryActive = false;
+			bool secondaryHeldBeforePrimary = false;
 			bool spellWheelBlocked = false;
 		};
+
+		static const float kMaxTapSeconds = 0.35f;
+		static const float kTapArmWindowSeconds = 2.0f;
 
 		static HandTriggerState s_leftTriggerState;
 		static HandTriggerState s_rightTriggerState;
 		static HandTriggerState s_twoHandSharedTriggerState;
 		static bool s_registered = false;
+
+		void ResetTriggerDropProgress(HandTriggerState& state, const bool keepTapArmed = false)
+		{
+			state.holdTime = 0.0f;
+			state.actionedThisHold = false;
+			state.spellWheelBlocked = false;
+			state.tapPressTime = 0.0f;
+			if (!keepTapArmed)
+			{
+				state.phase = HandTriggerState::kIdle;
+				state.tapArmedRemaining = 0.0f;
+			}
+		}
 
 		struct HandDropGuardState
 		{
@@ -116,8 +183,7 @@ namespace SwapDropAndHoldRedux
 
 		bool IsGripActive(const vr_1_0_12::VRControllerState_t& state)
 		{
-			return ((state.ulButtonPressed & GRIP_BUTTON_MASK) != 0) ||
-				((state.ulButtonTouched & GRIP_BUTTON_MASK) != 0);
+			return IsButtonPressedOrTouched(state, GRIP_BUTTON_MASK);
 		}
 
 		bool IsTriggerActive(const vr_1_0_12::VRControllerState_t& state)
@@ -134,18 +200,21 @@ namespace SwapDropAndHoldRedux
 		bool ReadControllerInput(
 			const bool isLeftVRController,
 			bool& triggerPressed,
-			bool& gripActive)
+			bool& gripActive,
+			bool& dropButtonPressed)
 		{
 			vr_1_0_12::VRControllerState_t controllerState{};
 			if (!GetControllerState(isLeftVRController, controllerState))
 			{
 				triggerPressed = false;
 				gripActive = false;
+				dropButtonPressed = false;
 				return false;
 			}
 
 			triggerPressed = IsTriggerActive(controllerState);
 			gripActive = IsGripActive(controllerState);
+			dropButtonPressed = IsConfiguredDropButtonActive(controllerState);
 			return true;
 		}
 
@@ -159,20 +228,43 @@ namespace SwapDropAndHoldRedux
 			return spellwheelInterface->IsMainWheelOpen() || spellwheelInterface->IsSecondaryWheelOpen();
 		}
 
-		bool IsGripBlockingTriggerDrop(TESForm* weapon, const bool gripActive, const bool triggerPressed)
+		bool IsSecondaryBlockingDrop(
+			TESForm* weapon,
+			const bool primaryPressed,
+			const bool secondaryActive)
 		{
-			if (!gripActive || !triggerPressed)
+			if (!primaryPressed || !secondaryActive)
 			{
 				return false;
 			}
 
-			// 2H weapons are gripped with both hands in VR; allow trigger-hold drop while gripping.
+			// 2H weapons commonly keep both buttons active in VR; don't block their drop.
 			if (IsTwoHandedWeaponForm(weapon))
 			{
 				return false;
 			}
 
 			return true;
+		}
+
+		void ResolveDropButtons(
+			const bool triggerPressed,
+			const bool gripActive,
+			const bool dropButtonPressed,
+			bool& outPrimaryPressed,
+			bool& outSecondaryActive)
+		{
+			outPrimaryPressed = dropButtonPressed;
+
+			// Spell-wheel style block uses the "other" common button.
+			if (dropButtonId == 2)
+			{
+				outSecondaryActive = triggerPressed;
+			}
+			else
+			{
+				outSecondaryActive = gripActive;
+			}
 		}
 
 		bool IsDropBlockedForHand(const bool isLeftVRController, TESForm* weapon)
@@ -190,12 +282,16 @@ namespace SwapDropAndHoldRedux
 
 			bool triggerPressed = false;
 			bool gripActive = false;
-			if (!ReadControllerInput(isLeftVRController, triggerPressed, gripActive))
+			bool dropButtonPressed = false;
+			if (!ReadControllerInput(isLeftVRController, triggerPressed, gripActive, dropButtonPressed))
 			{
 				return false;
 			}
 
-			return IsGripBlockingTriggerDrop(weapon, gripActive, triggerPressed);
+			bool primaryPressed = false;
+			bool secondaryActive = false;
+			ResolveDropButtons(triggerPressed, gripActive, dropButtonPressed, primaryPressed, secondaryActive);
+			return IsSecondaryBlockingDrop(weapon, primaryPressed, secondaryActive);
 		}
 
 		NiPoint3 GetHandSpawnPosition(PlayerCharacter* player, const bool isLeftGameHand)
@@ -454,6 +550,146 @@ namespace SwapDropAndHoldRedux
 				IsTwoHandedWeaponForm(player->GetEquippedObject(false));
 		}
 
+		void UpdateTapThenHoldDropState(
+			HandTriggerState& state,
+			TESForm* equipped,
+			const bool isLeftGameHand,
+			const bool isLeftVRController,
+			const bool triggerPressed,
+			const bool gripActive,
+			const bool dropButtonPressed,
+			const float deltaTime)
+		{
+			bool primaryPressed = false;
+			bool secondaryActive = false;
+			ResolveDropButtons(triggerPressed, gripActive, dropButtonPressed, primaryPressed, secondaryActive);
+
+			if (!primaryPressed)
+			{
+				state.secondaryHeldBeforePrimary = secondaryActive;
+
+				if (state.wasPressed && state.phase == HandTriggerState::kTapPressing)
+				{
+					if (state.tapPressTime > 0.0f && state.tapPressTime <= kMaxTapSeconds)
+					{
+						state.phase = HandTriggerState::kTapArmed;
+						state.tapArmedRemaining = kTapArmWindowSeconds;
+					}
+					else
+					{
+						// Long first press (power attack / staff fire / long grip) — not a tap.
+						ResetTriggerDropProgress(state);
+					}
+				}
+				else if (state.phase == HandTriggerState::kHoldPressing)
+				{
+					// Released early during drop hold — require a fresh tap.
+					ResetTriggerDropProgress(state);
+				}
+
+				if (state.phase == HandTriggerState::kTapArmed)
+				{
+					state.tapArmedRemaining -= deltaTime;
+					if (state.tapArmedRemaining <= 0.0f)
+					{
+						ResetTriggerDropProgress(state);
+					}
+				}
+
+				state.holdTime = 0.0f;
+				state.actionedThisHold = false;
+				state.wasPressed = false;
+				state.wasSecondaryActive = secondaryActive;
+				return;
+			}
+
+			if (!equipped)
+			{
+				ResetTriggerDropProgress(state);
+				state.wasPressed = primaryPressed;
+				state.wasSecondaryActive = secondaryActive;
+				return;
+			}
+
+			if (IsSpellWheelOpenNow())
+			{
+				ResetTriggerDropProgress(state);
+				state.wasPressed = primaryPressed;
+				state.wasSecondaryActive = secondaryActive;
+				return;
+			}
+
+			if (state.phase == HandTriggerState::kIdle ||
+				state.phase == HandTriggerState::kTapPressing)
+			{
+				if (!state.wasPressed)
+				{
+					state.phase = HandTriggerState::kTapPressing;
+					state.tapPressTime = 0.0f;
+					state.holdTime = 0.0f;
+					state.actionedThisHold = false;
+					if (!IsTwoHandedWeaponForm(equipped) &&
+						(state.secondaryHeldBeforePrimary || secondaryActive))
+					{
+						state.spellWheelBlocked = true;
+					}
+				}
+
+				state.tapPressTime += deltaTime;
+				state.wasPressed = true;
+				state.wasSecondaryActive = secondaryActive;
+				return;
+			}
+
+			if (state.phase == HandTriggerState::kTapArmed)
+			{
+				state.phase = HandTriggerState::kHoldPressing;
+				state.holdTime = 0.0f;
+				state.actionedThisHold = false;
+				state.spellWheelBlocked = false;
+				if (!IsTwoHandedWeaponForm(equipped) &&
+					(state.secondaryHeldBeforePrimary || secondaryActive))
+				{
+					state.spellWheelBlocked = true;
+				}
+			}
+
+			if (secondaryActive && !state.wasSecondaryActive && state.wasPressed && state.secondaryHeldBeforePrimary)
+			{
+				if (!IsTwoHandedWeaponForm(equipped))
+				{
+					state.spellWheelBlocked = true;
+				}
+			}
+
+			if (secondaryActive && !state.wasSecondaryActive && state.wasPressed && !state.secondaryHeldBeforePrimary)
+			{
+				state.holdTime = 0.0f;
+				state.actionedThisHold = false;
+			}
+
+			const bool blockDrop = state.spellWheelBlocked ||
+				IsSecondaryBlockingDrop(equipped, primaryPressed, secondaryActive);
+			if (blockDrop)
+			{
+				state.holdTime = 0.0f;
+			}
+			else if (state.phase == HandTriggerState::kHoldPressing)
+			{
+				state.holdTime += deltaTime;
+
+				if (!state.actionedThisHold && state.holdTime >= triggerHoldDropSeconds)
+				{
+					QueueTriggerHoldDrop(isLeftGameHand, isLeftVRController, equipped->formID);
+					state.actionedThisHold = true;
+					ResetTriggerDropProgress(state);
+				}
+			}
+
+			state.wasPressed = primaryPressed;
+			state.wasSecondaryActive = secondaryActive;
+		}
+
 		bool UpdateTwoHandedTriggerHoldState(PlayerCharacter* player, const float deltaTime)
 		{
 			TESForm* leftEquipped = player->GetEquippedObject(true);
@@ -476,66 +712,22 @@ namespace SwapDropAndHoldRedux
 				return false;
 			}
 
-			bool leftTrigger = false;
-			bool leftGrip = false;
-			bool rightTrigger = false;
-			bool rightGrip = false;
-			ReadControllerInput(true, leftTrigger, leftGrip);
-			ReadControllerInput(false, rightTrigger, rightGrip);
+			const bool isLeftVRController = GameHandToVRController(isLeftGameHand);
 
-			HandTriggerState& activeState = s_twoHandSharedTriggerState;
-			const bool anyTrigger = leftTrigger || rightTrigger;
+			bool triggerPressed = false;
+			bool gripActive = false;
+			bool dropButtonPressed = false;
+			ReadControllerInput(isLeftVRController, triggerPressed, gripActive, dropButtonPressed);
 
-			if (!anyTrigger)
-			{
-				activeState.holdTime = 0.0f;
-				activeState.actionedThisHold = false;
-				activeState.spellWheelBlocked = false;
-				activeState.wasPressed = false;
-				activeState.wasGripActive = leftGrip || rightGrip;
-				activeState.gripHeldBeforeTrigger = activeState.wasGripActive;
-				return true;
-			}
-
-			bool dropLeftVR = leftTrigger;
-			if (leftTrigger && rightTrigger)
-			{
-				dropLeftVR = GameHandToVRController(isLeftGameHand);
-			}
-			else if (!leftTrigger)
-			{
-				dropLeftVR = false;
-			}
-
-			if (IsSpellWheelOpenNow())
-			{
-				activeState.holdTime = 0.0f;
-				activeState.actionedThisHold = false;
-				activeState.wasPressed = anyTrigger;
-				activeState.wasGripActive = leftGrip || rightGrip;
-				return true;
-			}
-
-			const bool blockDrop = activeState.spellWheelBlocked ||
-				IsGripBlockingTriggerDrop(weapon, leftGrip && leftTrigger, leftTrigger) ||
-				IsGripBlockingTriggerDrop(weapon, rightGrip && rightTrigger, rightTrigger);
-			if (blockDrop)
-			{
-				activeState.holdTime = 0.0f;
-			}
-			else
-			{
-				activeState.holdTime += deltaTime;
-
-				if (!activeState.actionedThisHold && activeState.holdTime >= triggerHoldDropSeconds)
-				{
-					QueueTriggerHoldDrop(isLeftGameHand, dropLeftVR, weapon->formID);
-					activeState.actionedThisHold = true;
-				}
-			}
-
-			activeState.wasPressed = anyTrigger;
-			activeState.wasGripActive = leftGrip || rightGrip;
+			UpdateTapThenHoldDropState(
+				s_twoHandSharedTriggerState,
+				weapon,
+				isLeftGameHand,
+				isLeftVRController,
+				triggerPressed,
+				gripActive,
+				dropButtonPressed,
+				deltaTime);
 			return true;
 		}
 
@@ -544,12 +736,10 @@ namespace SwapDropAndHoldRedux
 			PlayerCharacter* player = *g_thePlayer;
 			if (!player)
 			{
-				state.holdTime = 0.0f;
-				state.actionedThisHold = false;
+				ResetTriggerDropProgress(state);
 				state.wasPressed = false;
-				state.wasGripActive = false;
-				state.gripHeldBeforeTrigger = false;
-				state.spellWheelBlocked = false;
+				state.wasSecondaryActive = false;
+				state.secondaryHeldBeforePrimary = false;
 				return;
 			}
 
@@ -560,93 +750,21 @@ namespace SwapDropAndHoldRedux
 
 			const TrackedWeaponHandInfo tracked = GetTrackedWeaponForVRController(player, isLeftVRController);
 			TESForm* equipped = tracked.weapon;
-			HandTriggerState& activeState = state;
 
 			bool triggerPressed = false;
 			bool gripActive = false;
-			ReadControllerInput(isLeftVRController, triggerPressed, gripActive);
+			bool dropButtonPressed = false;
+			ReadControllerInput(isLeftVRController, triggerPressed, gripActive, dropButtonPressed);
 
-			if (!triggerPressed)
-			{
-				activeState.gripHeldBeforeTrigger = gripActive;
-			}
-
-			if (!equipped)
-			{
-				activeState.holdTime = 0.0f;
-				activeState.actionedThisHold = false;
-				activeState.spellWheelBlocked = false;
-				activeState.wasPressed = triggerPressed;
-				activeState.wasGripActive = gripActive;
-				return;
-			}
-
-			const bool isLeftGameHand = tracked.isLeftGameHand;
-			const UInt32 weaponFormID = equipped->formID;
-
-			if (!triggerPressed)
-			{
-				activeState.holdTime = 0.0f;
-				activeState.actionedThisHold = false;
-				activeState.spellWheelBlocked = false;
-				activeState.wasPressed = false;
-				activeState.wasGripActive = gripActive;
-				return;
-			}
-
-			if (IsSpellWheelOpenNow())
-			{
-				activeState.holdTime = 0.0f;
-				activeState.actionedThisHold = false;
-				activeState.wasPressed = triggerPressed;
-				activeState.wasGripActive = gripActive;
-				return;
-			}
-
-			if (!activeState.wasPressed)
-			{
-				activeState.holdTime = 0.0f;
-				activeState.actionedThisHold = false;
-				if (!IsTwoHandedWeaponForm(equipped) &&
-					(activeState.gripHeldBeforeTrigger || gripActive))
-				{
-					activeState.spellWheelBlocked = true;
-				}
-			}
-
-			if (gripActive && !activeState.wasGripActive && activeState.wasPressed && activeState.gripHeldBeforeTrigger)
-			{
-				if (!IsTwoHandedWeaponForm(equipped))
-				{
-					activeState.spellWheelBlocked = true;
-				}
-			}
-
-			if (gripActive && !activeState.wasGripActive && activeState.wasPressed && !activeState.gripHeldBeforeTrigger)
-			{
-				activeState.holdTime = 0.0f;
-				activeState.actionedThisHold = false;
-			}
-
-			const bool blockDrop = activeState.spellWheelBlocked ||
-				IsGripBlockingTriggerDrop(equipped, gripActive, triggerPressed);
-			if (blockDrop)
-			{
-				activeState.holdTime = 0.0f;
-			}
-			else
-			{
-				activeState.holdTime += deltaTime;
-
-				if (!activeState.actionedThisHold && activeState.holdTime >= triggerHoldDropSeconds)
-				{
-					QueueTriggerHoldDrop(isLeftGameHand, isLeftVRController, weaponFormID);
-					activeState.actionedThisHold = true;
-				}
-			}
-
-			activeState.wasPressed = triggerPressed;
-			activeState.wasGripActive = gripActive;
+			UpdateTapThenHoldDropState(
+				state,
+				equipped,
+				tracked.isLeftGameHand,
+				isLeftVRController,
+				triggerPressed,
+				gripActive,
+				dropButtonPressed,
+				deltaTime);
 		}
 
 		void OnPrePhysicsStep(void* /*world*/)
@@ -666,7 +784,7 @@ namespace SwapDropAndHoldRedux
 			}
 
 			PlayerCharacter* player = *g_thePlayer;
-			if (player && !UpdateTwoHandedTriggerHoldState(player, deltaTime))
+			if (enableDropping && player && !UpdateTwoHandedTriggerHoldState(player, deltaTime))
 			{
 				UpdateHandTriggerState(true, s_leftTriggerState, deltaTime);
 				UpdateHandTriggerState(false, s_rightTriggerState, deltaTime);
@@ -694,8 +812,9 @@ namespace SwapDropAndHoldRedux
 		higgsInterface->AddDroppedCallback(OnTriggerHoldWeaponDropped);
 		s_registered = true;
 		LOG_INFO(
-			"Trigger hold drop registered (%.2fs hold from ini, grip/spell wheel orb block drop%s).",
+			"Trigger hold drop registered (tap then hold %.2fs on %s from ini, spell wheel orb block drop%s).",
 			triggerHoldDropSeconds,
+			dropButtonName,
 			enableTwoHandedWeapons ? ", 2H weapons enabled" : "");
 	}
 

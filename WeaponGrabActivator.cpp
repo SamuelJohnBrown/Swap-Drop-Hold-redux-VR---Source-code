@@ -12,6 +12,8 @@
 #include <skse64/GameExtraData.h>
 #include <skse64/gamethreads.h>
 
+#include <unordered_set>
+
 namespace SwapDropAndHoldRedux
 {
 	extern SKSETaskInterface* g_task;
@@ -23,6 +25,36 @@ namespace SwapDropAndHoldRedux
 		static RelocPtr<bool> s_leftHandedMode(0x01E71778);
 
 		static const int kEquipSettleFrames = 3;
+		static const int kPickupPollRetries = 12;
+
+		// Prevent stacked grab callbacks / retries from activating the same world ref repeatedly.
+		static std::unordered_set<UInt32> s_pendingPickupRefIDs;
+
+		bool BeginPendingPickup(const UInt32 weaponRefID)
+		{
+			if (weaponRefID == 0)
+			{
+				return true;
+			}
+
+			if (s_pendingPickupRefIDs.find(weaponRefID) != s_pendingPickupRefIDs.end())
+			{
+				return false;
+			}
+
+			s_pendingPickupRefIDs.insert(weaponRefID);
+			return true;
+		}
+
+		void EndPendingPickup(const UInt32 weaponRefID)
+		{
+			if (weaponRefID == 0)
+			{
+				return;
+			}
+
+			s_pendingPickupRefIDs.erase(weaponRefID);
+		}
 
 		bool GrabHandToGameHand(const bool isLeftGrabHand)
 		{
@@ -98,11 +130,8 @@ namespace SwapDropAndHoldRedux
 				return false;
 			}
 
-			if (ItemInInventory(player, grabbedRefr->baseForm))
-			{
-				return true;
-			}
-
+			// Do not early-out on "already owns this base form" — that skips picking up
+			// the world ref and leaves a second copy in the world / HIGGS hand.
 			return RefActivate(grabbedRefr, player, 0, 0, 1, false);
 		}
 
@@ -535,11 +564,17 @@ namespace SwapDropAndHoldRedux
 		class PickupGrabbedWeaponTask : public TaskDelegate
 		{
 		public:
-			PickupGrabbedWeaponTask(const bool isLeftGameHand, const UInt32 weaponFormID, const UInt32 weaponRefID, const int retriesRemaining = 12)
+			PickupGrabbedWeaponTask(
+				const bool isLeftGameHand,
+				const UInt32 weaponFormID,
+				const UInt32 weaponRefID,
+				const int retriesRemaining = kPickupPollRetries,
+				const bool activateAttempted = false)
 				: m_isLeftGameHand(isLeftGameHand)
 				, m_weaponFormID(weaponFormID)
 				, m_weaponRefID(weaponRefID)
 				, m_retriesRemaining(retriesRemaining)
+				, m_activateAttempted(activateAttempted)
 			{
 			}
 
@@ -549,46 +584,71 @@ namespace SwapDropAndHoldRedux
 				TESForm* weaponForm = LookupFormByID(m_weaponFormID);
 				if (!player || !weaponForm)
 				{
+					EndPendingPickup(m_weaponRefID);
 					return;
 				}
 
-				if (!ItemInInventory(player, weaponForm))
+				if (ItemInInventory(player, weaponForm))
 				{
-					TESObjectREFR* weaponRef = nullptr;
-					if (m_weaponRefID != 0)
+					EndPendingPickup(m_weaponRefID);
+					if (g_task)
 					{
-						TESForm* refForm = LookupFormByID(m_weaponRefID);
-						weaponRef = DYNAMIC_CAST(refForm, TESForm, TESObjectREFR);
-					}
-
-					if (weaponRef)
-					{
-						ActivateGrabbedRef(weaponRef, player);
-					}
-					else
-					{
-						AddItem_Native(nullptr, 0, player, weaponForm, 1, true);
-					}
-				}
-
-				if (!ItemInInventory(player, weaponForm))
-				{
-					if (m_retriesRemaining > 0 && g_task)
-					{
-						g_task->AddTask(new PickupGrabbedWeaponTask(
-							m_isLeftGameHand, m_weaponFormID, m_weaponRefID, m_retriesRemaining - 1));
-					}
-					else
-					{
-						LOG_ERR("Failed to add grabbed weapon to inventory: formId=%08X", m_weaponFormID);
+						g_task->AddTask(new EquipGrabbedWeaponTask(m_isLeftGameHand, m_weaponFormID));
 					}
 					return;
 				}
 
-				if (g_task)
+				TESObjectREFR* weaponRef = nullptr;
+				if (m_weaponRefID != 0)
 				{
-					g_task->AddTask(new EquipGrabbedWeaponTask(m_isLeftGameHand, m_weaponFormID));
+					TESForm* refForm = LookupFormByID(m_weaponRefID);
+					weaponRef = DYNAMIC_CAST(refForm, TESForm, TESObjectREFR);
 				}
+
+				if (!m_activateAttempted)
+				{
+					if (!weaponRef)
+					{
+						// World ref already gone and item never arrived — do NOT AddItem
+						// (that was spawning free duplicates when Activate had already run).
+						LOG_ERR(
+							"Grab pickup aborted: world ref gone and weapon not in inventory formId=%08X refId=%08X",
+							m_weaponFormID,
+							m_weaponRefID);
+						EndPendingPickup(m_weaponRefID);
+						return;
+					}
+
+					ActivateGrabbedRef(weaponRef, player);
+					m_activateAttempted = true;
+				}
+
+				if (ItemInInventory(player, weaponForm))
+				{
+					EndPendingPickup(m_weaponRefID);
+					if (g_task)
+					{
+						g_task->AddTask(new EquipGrabbedWeaponTask(m_isLeftGameHand, m_weaponFormID));
+					}
+					return;
+				}
+
+				if (m_retriesRemaining > 0 && g_task)
+				{
+					g_task->AddTask(new PickupGrabbedWeaponTask(
+						m_isLeftGameHand,
+						m_weaponFormID,
+						m_weaponRefID,
+						m_retriesRemaining - 1,
+						m_activateAttempted));
+					return;
+				}
+
+				LOG_ERR(
+					"Failed to pick up grabbed weapon into inventory: formId=%08X refId=%08X",
+					m_weaponFormID,
+					m_weaponRefID);
+				EndPendingPickup(m_weaponRefID);
 			}
 
 			virtual void Dispose() override
@@ -601,6 +661,7 @@ namespace SwapDropAndHoldRedux
 			UInt32 m_weaponFormID;
 			UInt32 m_weaponRefID;
 			int m_retriesRemaining;
+			bool m_activateAttempted;
 		};
 	}
 
@@ -608,6 +669,14 @@ namespace SwapDropAndHoldRedux
 	{
 		if (!grabbedRefr || !grabbedRefr->baseForm || !g_task)
 		{
+			return;
+		}
+
+		if (!BeginPendingPickup(grabbedRefr->formID))
+		{
+			LOG_INFO(
+				"Grab pickup already pending for refId=%08X — ignoring duplicate grab callback",
+				grabbedRefr->formID);
 			return;
 		}
 
@@ -623,8 +692,20 @@ namespace SwapDropAndHoldRedux
 		const UInt32 weaponFormID,
 		const float pullSpeed)
 	{
-		if (!g_task || weaponFormID == 0)
+		if (!g_task || weaponFormID == 0 || !enableSwapping)
 		{
+			return;
+		}
+
+		// No hand swapping for 2H weapons, including the 2H Weapons Unlocked
+		// greatsword/warhammer/battleaxe proxy forms (authored as 1H weapons).
+		TESForm* weaponForm = LookupFormByID(weaponFormID);
+		if (IsSwapPullExcludedForm(weaponForm))
+		{
+			LOG_INFO(
+				"Swap pull suppressed for 2H weapon/proxy: %s formId=%08X",
+				GetSafeFormName(weaponForm),
+				weaponFormID);
 			return;
 		}
 

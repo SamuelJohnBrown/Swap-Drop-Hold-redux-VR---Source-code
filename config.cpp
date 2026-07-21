@@ -1,5 +1,8 @@
 #include "config.h"
 
+#include <algorithm>
+#include <cctype>
+
 namespace SwapDropAndHoldRedux {
 		
 	int logging = 2;
@@ -8,7 +11,121 @@ namespace SwapDropAndHoldRedux {
 	float dropGuardTimeoutSeconds = 4.0f;
 	float swapPullSpeedThreshold = 40.0f;
 	float swapPullMinDistanceGrowth = 10.0f;
+	bool enableSwapping = true;
+	bool enableDropping = true;
+	bool enableGrabToEquip = true;
 	bool enableTwoHandedWeapons = false;
+	bool enableTwoHandedHandSwapping = false;
+	bool enableStaves = true;
+	int dropButtonId = 33; // OpenVR k_EButton_SteamVR_Trigger / Axis1
+	const char* dropButtonName = "Trigger";
+
+	namespace
+	{
+		bool ParseBoolSetting(const std::string& value)
+		{
+			return value == "1" || value == "true" || value == "True" || value == "TRUE";
+		}
+
+		std::string ToLowerCopy(std::string value)
+		{
+			std::transform(value.begin(), value.end(), value.begin(),
+				[](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+			return value;
+		}
+
+		bool TryParseDropButton(const std::string& rawValue, int& outButtonId, const char*& outName)
+		{
+			const std::string value = ToLowerCopy(rawValue);
+
+			if (value == "trigger" || value == "axis1" || value == "steamvr_trigger")
+			{
+				outButtonId = 33;
+				outName = "Trigger";
+				return true;
+			}
+			if (value == "grip" || value == "squeeze")
+			{
+				outButtonId = 2;
+				outName = "Grip";
+				return true;
+			}
+			if (value == "a" || value == "button_a" || value == "x" || value == "button_x")
+			{
+				outButtonId = 7;
+				outName = "A";
+				return true;
+			}
+			if (value == "b" || value == "button_b" || value == "y" || value == "button_y" ||
+				value == "menu" || value == "applicationmenu" || value == "appmenu")
+			{
+				outButtonId = 1;
+				outName = "B/Menu";
+				return true;
+			}
+			if (value == "stick" || value == "stickclick" || value == "joystickclick" ||
+				value == "touchpad" || value == "touchpadclick" || value == "pad" ||
+				value == "padclick" || value == "axis0" || value == "thumbstick")
+			{
+				outButtonId = 32;
+				outName = "Stick/Touchpad";
+				return true;
+			}
+			if (value == "joystick" || value == "indexjoystick" || value == "axis3")
+			{
+				outButtonId = 35;
+				outName = "Joystick";
+				return true;
+			}
+			if (value == "dpadup" || value == "padup" || value == "up")
+			{
+				outButtonId = 4;
+				outName = "DPadUp";
+				return true;
+			}
+			if (value == "dpaddown" || value == "paddown" || value == "down")
+			{
+				outButtonId = 6;
+				outName = "DPadDown";
+				return true;
+			}
+			if (value == "dpadleft" || value == "padleft" || value == "left")
+			{
+				outButtonId = 3;
+				outName = "DPadLeft";
+				return true;
+			}
+			if (value == "dpadright" || value == "padright" || value == "right")
+			{
+				outButtonId = 5;
+				outName = "DPadRight";
+				return true;
+			}
+			if (value == "system")
+			{
+				outButtonId = 0;
+				outName = "System";
+				return true;
+			}
+
+			// Raw OpenVR button id (0-63)
+			try
+			{
+				const int id = std::stoi(value);
+				if (id >= 0 && id <= 63)
+				{
+					outButtonId = id;
+					outName = "Custom";
+					return true;
+				}
+			}
+			catch (...)
+			{
+			}
+
+			return false;
+		}
+	}
 
     void loadConfig() 
     {
@@ -24,6 +141,9 @@ namespace SwapDropAndHoldRedux {
                 transform(filepath.begin(), filepath.end(), filepath.begin(), ::tolower);
                 file.open(filepath);
             }
+
+			bool legacyUseGripForDrop = false;
+			bool sawDropButton = false;
 
             if (file.is_open()) 
             {
@@ -104,19 +224,74 @@ namespace SwapDropAndHoldRedux {
                                 swapPullMinDistanceGrowth = 100.0f;
                             }
                         }
+                        else if (variableName == "EnableSwapping")
+                        {
+                            enableSwapping = ParseBoolSetting(variableValueStr);
+                        }
+                        else if (variableName == "EnableDropping")
+                        {
+                            enableDropping = ParseBoolSetting(variableValueStr);
+                        }
+                        else if (variableName == "EnableGrabToEquip")
+                        {
+                            enableGrabToEquip = ParseBoolSetting(variableValueStr);
+                        }
                         else if (variableName == "EnableTwoHandedWeapons")
                         {
-                            enableTwoHandedWeapons =
-                                variableValueStr == "1" ||
-                                variableValueStr == "true" ||
-                                variableValueStr == "True";
+                            enableTwoHandedWeapons = ParseBoolSetting(variableValueStr);
+                        }
+                        else if (variableName == "EnableTwoHandedHandSwapping")
+                        {
+                            enableTwoHandedHandSwapping = ParseBoolSetting(variableValueStr);
+                        }
+                        else if (variableName == "EnableStaves")
+                        {
+                            enableStaves = ParseBoolSetting(variableValueStr);
+                        }
+                        else if (variableName == "DropButton")
+                        {
+                            int parsedId = dropButtonId;
+                            const char* parsedName = dropButtonName;
+                            if (TryParseDropButton(variableValueStr, parsedId, parsedName))
+                            {
+                                dropButtonId = parsedId;
+                                dropButtonName = parsedName;
+                                sawDropButton = true;
+                            }
+                            else
+                            {
+                                _MESSAGE(
+                                    "Unknown DropButton \"%s\" — keeping %s (id %d). Valid: Trigger, Grip, A, B/Menu, Stick/Touchpad, Joystick, DPadUp/Down/Left/Right, System, or 0-63.",
+                                    variableValueStr.c_str(),
+                                    dropButtonName,
+                                    dropButtonId);
+                            }
+                        }
+                        else if (variableName == "UseGripForDrop")
+                        {
+							// Legacy alias for DropButton=Grip
+                            legacyUseGripForDrop = ParseBoolSetting(variableValueStr);
                         }
                     }                    
                 } 
             }
+
+			if (!sawDropButton && legacyUseGripForDrop)
+			{
+				dropButtonId = 2;
+				dropButtonName = "Grip";
+			}
+
             _MESSAGE(
-                "Config file is loaded successfully (EnableTwoHandedWeapons=%s).",
-                enableTwoHandedWeapons ? "true" : "false");
+                "Config file is loaded successfully (EnableSwapping=%s, EnableDropping=%s, EnableGrabToEquip=%s, EnableTwoHandedWeapons=%s, EnableTwoHandedHandSwapping=%s, EnableStaves=%s, DropButton=%s id=%d).",
+                enableSwapping ? "true" : "false",
+                enableDropping ? "true" : "false",
+                enableGrabToEquip ? "true" : "false",
+                enableTwoHandedWeapons ? "true" : "false",
+                enableTwoHandedHandSwapping ? "true" : "false",
+                enableStaves ? "true" : "false",
+                dropButtonName,
+                dropButtonId);
             return;
         }
         return;

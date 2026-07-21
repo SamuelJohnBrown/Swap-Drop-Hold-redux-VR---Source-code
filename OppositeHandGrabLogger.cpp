@@ -594,6 +594,11 @@ namespace SwapDropAndHoldRedux
 					return;
 				}
 
+				if (!enableSwapping || IsSwapPullExcludedForm(weaponForm))
+				{
+					return;
+				}
+
 				TESForm* equippedOnDest = player->GetEquippedObject(!m_isLeftEquippedHand);
 				if (equippedOnDest && equippedOnDest->formID == m_weaponFormID)
 				{
@@ -741,7 +746,9 @@ namespace SwapDropAndHoldRedux
 				}
 			}
 
-			if (state.latchedOppositeGrab)
+			// No hand swapping when disabled in the ini, or for 2H weapons
+			// (including 2H Weapons Unlocked proxy forms).
+			if (state.latchedOppositeGrab && enableSwapping && !IsSwapPullExcludedForm(equipped))
 			{
 				NiPoint3 oppositeHandPos{};
 				if (TryGetOppositeHandPosition(player, isLeftEquippedHand, oppositeVRController, oppositeHandPos))

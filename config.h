@@ -32,7 +32,14 @@ namespace SwapDropAndHoldRedux {
 	extern float dropGuardTimeoutSeconds;
 	extern float swapPullSpeedThreshold;
 	extern float swapPullMinDistanceGrowth;
+	extern bool enableSwapping;
+	extern bool enableDropping;
+	extern bool enableGrabToEquip;
 	extern bool enableTwoHandedWeapons;
+	extern bool enableTwoHandedHandSwapping;
+	extern bool enableStaves;
+	extern int dropButtonId;
+	extern const char* dropButtonName;
 
 	void loadConfig();
 	
