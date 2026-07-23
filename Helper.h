@@ -42,4 +42,8 @@ namespace SwapDropAndHoldRedux
 	void RemoveItemFromInventory(TESObjectREFR* target, TESForm* item, SInt32 count, bool silent);
 	void SetOwnerToPlayer(TESObjectREFR* objRef);
 
+	// True when a Scaleform menu is open that captures VR controller input (SkyUI-VR routes
+	// GetControllerState into the menu — polling it from HIGGS callbacks crashes crafting/UI).
+	bool IsInputCapturingMenuOpen();
+
 }

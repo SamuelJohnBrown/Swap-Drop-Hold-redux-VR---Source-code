@@ -507,7 +507,7 @@ namespace SwapDropAndHoldRedux
 			{
 				PlayerCharacter* player = *g_thePlayer;
 				TESForm* weaponForm = LookupFormByID(m_weaponFormID);
-				if (!player || !weaponForm || !IsTrackedWeaponForm(weaponForm))
+				if (!player || !weaponForm || !IsTrackedItemForm(weaponForm))
 				{
 					return;
 				}
@@ -518,20 +518,14 @@ namespace SwapDropAndHoldRedux
 					return;
 				}
 
-				auto* weapon = DYNAMIC_CAST(weaponForm, TESForm, TESObjectWEAP);
-				if (!weapon)
-				{
-					return;
-				}
-
-				const char* typeLabel = GetTrackedWeaponTypeLabel(weapon->type());
+				const char* typeLabel = GetTrackedItemTypeLabel(weaponForm);
 				if (!typeLabel)
 				{
 					return;
 				}
 
 				LOG_INFO(
-					"Opposite hand grab: %s controller grabbed weapon equipped on %s hand: %s (%s) formId=%08X refId=%08X",
+					"Opposite hand grab: %s controller grabbed item equipped on %s hand: %s (%s) formId=%08X refId=%08X",
 					m_isLeftGrabController ? "left" : "right",
 					m_isLeftEquippedHand ? "left" : "right",
 					GetSafeFormName(weaponForm),
@@ -589,12 +583,14 @@ namespace SwapDropAndHoldRedux
 			{
 				PlayerCharacter* player = *g_thePlayer;
 				TESForm* weaponForm = LookupFormByID(m_weaponFormID);
-				if (!player || !weaponForm || !IsTrackedWeaponForm(weaponForm))
+				if (!player || !weaponForm || !IsTrackedItemForm(weaponForm))
 				{
 					return;
 				}
 
-				if (!enableSwapping || IsSwapPullExcludedForm(weaponForm))
+				// No hand swapping for 2H weapons (including 2H Weapons Unlocked proxies)
+				// unless EnableTwoHandedHandSwapping is set in the ini.
+				if (IsSwapPullExcludedForm(weaponForm))
 				{
 					return;
 				}
@@ -605,13 +601,7 @@ namespace SwapDropAndHoldRedux
 					return;
 				}
 
-				auto* weapon = DYNAMIC_CAST(weaponForm, TESForm, TESObjectWEAP);
-				if (!weapon)
-				{
-					return;
-				}
-
-				const char* typeLabel = GetTrackedWeaponTypeLabel(weapon->type());
+				const char* typeLabel = GetTrackedItemTypeLabel(weaponForm);
 				if (!typeLabel)
 				{
 					return;
@@ -710,7 +700,17 @@ namespace SwapDropAndHoldRedux
 			}
 
 			TESForm* equipped = player->GetEquippedObject(isLeftEquippedHand);
-			if (!equipped || !IsTrackedWeaponForm(equipped))
+			if (!equipped || !IsTrackedItemForm(equipped))
+			{
+				state.wasRawOppositeGrabActive = false;
+				ResetEquippedHandGrabTracking(state);
+				return;
+			}
+
+			// Shields / proxy shield: grab-equip and drop only unless EnableShieldSwapping
+			// (proxy shield is never swap-eligible).
+			if (IsShieldProxyForm(equipped) ||
+				(!enableShieldSwapping && IsTrackedShieldForm(equipped)))
 			{
 				state.wasRawOppositeGrabActive = false;
 				ResetEquippedHandGrabTracking(state);
@@ -746,9 +746,9 @@ namespace SwapDropAndHoldRedux
 				}
 			}
 
-			// No hand swapping when disabled in the ini, or for 2H weapons
-			// (including 2H Weapons Unlocked proxy forms).
-			if (state.latchedOppositeGrab && enableSwapping && !IsSwapPullExcludedForm(equipped))
+			// No swap-pull tracking for 2H weapons (including 2H Weapons Unlocked proxies)
+			// unless EnableTwoHandedHandSwapping is set in the ini.
+			if (state.latchedOppositeGrab && !IsSwapPullExcludedForm(equipped))
 			{
 				NiPoint3 oppositeHandPos{};
 				if (TryGetOppositeHandPosition(player, isLeftEquippedHand, oppositeVRController, oppositeHandPos))
@@ -805,6 +805,11 @@ namespace SwapDropAndHoldRedux
 
 		void OnSwapTrackingStep()
 		{
+			if (IsInputCapturingMenuOpen())
+			{
+				return;
+			}
+
 			static auto lastTime = std::chrono::high_resolution_clock::now();
 			const auto currentTime = std::chrono::high_resolution_clock::now();
 			float deltaTime = std::chrono::duration<float>(currentTime - lastTime).count();
@@ -825,6 +830,11 @@ namespace SwapDropAndHoldRedux
 
 		void OnStartTwoHanding()
 		{
+			if (IsInputCapturingMenuOpen())
+			{
+				return;
+			}
+
 			PlayerCharacter* player = *g_thePlayer;
 			if (!player || !higgsInterface)
 			{
@@ -853,7 +863,7 @@ namespace SwapDropAndHoldRedux
 
 			bool isLeftEquippedHand = !VRControllerToGameHand(isLeftGrabController);
 			TESForm* equipped = player->GetEquippedObject(isLeftEquippedHand);
-			if ((!equipped || !IsTrackedWeaponForm(equipped)) && enableTwoHandedWeapons)
+			if ((!equipped || !IsTrackedItemForm(equipped)) && enableTwoHandedWeapons)
 			{
 				const bool otherHand = !isLeftEquippedHand;
 				TESForm* otherEquipped = player->GetEquippedObject(otherHand);
@@ -863,7 +873,7 @@ namespace SwapDropAndHoldRedux
 					isLeftEquippedHand = otherHand;
 				}
 			}
-			if (!equipped || !IsTrackedWeaponForm(equipped))
+			if (!equipped || !IsTrackedItemForm(equipped))
 			{
 				return;
 			}

@@ -11,19 +11,30 @@ namespace SwapDropAndHoldRedux {
 	float dropGuardTimeoutSeconds = 4.0f;
 	float swapPullSpeedThreshold = 40.0f;
 	float swapPullMinDistanceGrowth = 10.0f;
-	bool enableSwapping = true;
-	bool enableDropping = true;
-	bool enableGrabToEquip = true;
 	bool enableTwoHandedWeapons = false;
 	bool enableTwoHandedHandSwapping = false;
 	bool enableStaves = true;
+	bool enableShields = true;
+	bool enableShieldSwapping = false;
 	int dropButtonId = 33; // OpenVR k_EButton_SteamVR_Trigger / Axis1
 	const char* dropButtonName = "Trigger";
 
 	namespace
 	{
-		bool ParseBoolSetting(const std::string& value)
+		bool ParseBoolSetting(const std::string& rawValue)
 		{
+			// Tolerate inline comments ("1 ; comment") and stray whitespace —
+			// strict equality here silently disabled features for users.
+			std::string value = rawValue;
+			const size_t commentPos = value.find_first_of(";#");
+			if (commentPos != std::string::npos)
+			{
+				value.erase(commentPos);
+			}
+			value.erase(0, value.find_first_not_of(" \t\r\n"));
+			const size_t lastChar = value.find_last_not_of(" \t\r\n");
+			value.erase(lastChar == std::string::npos ? 0 : lastChar + 1);
+
 			return value == "1" || value == "true" || value == "True" || value == "TRUE";
 		}
 
@@ -224,18 +235,6 @@ namespace SwapDropAndHoldRedux {
                                 swapPullMinDistanceGrowth = 100.0f;
                             }
                         }
-                        else if (variableName == "EnableSwapping")
-                        {
-                            enableSwapping = ParseBoolSetting(variableValueStr);
-                        }
-                        else if (variableName == "EnableDropping")
-                        {
-                            enableDropping = ParseBoolSetting(variableValueStr);
-                        }
-                        else if (variableName == "EnableGrabToEquip")
-                        {
-                            enableGrabToEquip = ParseBoolSetting(variableValueStr);
-                        }
                         else if (variableName == "EnableTwoHandedWeapons")
                         {
                             enableTwoHandedWeapons = ParseBoolSetting(variableValueStr);
@@ -247,6 +246,14 @@ namespace SwapDropAndHoldRedux {
                         else if (variableName == "EnableStaves")
                         {
                             enableStaves = ParseBoolSetting(variableValueStr);
+                        }
+                        else if (variableName == "EnableShields")
+                        {
+                            enableShields = ParseBoolSetting(variableValueStr);
+                        }
+                        else if (variableName == "EnableShieldSwapping")
+                        {
+                            enableShieldSwapping = ParseBoolSetting(variableValueStr);
                         }
                         else if (variableName == "DropButton")
                         {
@@ -283,13 +290,12 @@ namespace SwapDropAndHoldRedux {
 			}
 
             _MESSAGE(
-                "Config file is loaded successfully (EnableSwapping=%s, EnableDropping=%s, EnableGrabToEquip=%s, EnableTwoHandedWeapons=%s, EnableTwoHandedHandSwapping=%s, EnableStaves=%s, DropButton=%s id=%d).",
-                enableSwapping ? "true" : "false",
-                enableDropping ? "true" : "false",
-                enableGrabToEquip ? "true" : "false",
+                "Config file is loaded successfully (EnableTwoHandedWeapons=%s, EnableTwoHandedHandSwapping=%s, EnableStaves=%s, EnableShields=%s, EnableShieldSwapping=%s, DropButton=%s id=%d).",
                 enableTwoHandedWeapons ? "true" : "false",
                 enableTwoHandedHandSwapping ? "true" : "false",
                 enableStaves ? "true" : "false",
+                enableShields ? "true" : "false",
+                enableShieldSwapping ? "true" : "false",
                 dropButtonName,
                 dropButtonId);
             return;

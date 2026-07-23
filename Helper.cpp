@@ -249,4 +249,47 @@ namespace SwapDropAndHoldRedux
 
 		SetPlayerOwnership(&objRef->extraData);
 	}
+
+	bool IsInputCapturingMenuOpen()
+	{
+		MenuManager* menuManager = MenuManager::GetSingleton();
+		UIStringHolder* menuNames = UIStringHolder::GetSingleton();
+		if (!menuManager || !menuNames)
+		{
+			return false;
+		}
+
+		BSFixedString* openMenus[] = {
+			&menuNames->containerMenu,
+			&menuNames->inventoryMenu,
+			&menuNames->magicMenu,
+			&menuNames->barterMenu,
+			&menuNames->giftMenu,
+			&menuNames->favoritesMenu,
+			&menuNames->craftingMenu,
+			&menuNames->dialogueMenu,
+			&menuNames->journalMenu,
+			&menuNames->bookMenu,
+			&menuNames->mapMenu,
+			&menuNames->statsMenu,
+			&menuNames->lockpickingMenu,
+			&menuNames->trainingMenu,
+			&menuNames->tweenMenu,
+			&menuNames->sleepWaitMenu,
+			&menuNames->levelUpMenu,
+			&menuNames->quantityMenu,
+			&menuNames->messageBoxMenu,
+			&menuNames->raceSexMenu,
+		};
+
+		for (BSFixedString* menuName : openMenus)
+		{
+			if (menuManager->IsMenuOpen(menuName))
+			{
+				return true;
+			}
+		}
+
+		return false;
+	}
 }

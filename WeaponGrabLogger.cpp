@@ -44,42 +44,112 @@ namespace SwapDropAndHoldRedux
 
 		void OnWeaponGrabbed(const bool isLeft, TESObjectREFR* grabbedRefr)
 		{
-			if (!enableGrabToEquip)
-			{
-				return;
-			}
-
 			if (!grabbedRefr || !grabbedRefr->baseForm)
 			{
 				return;
 			}
 
-			TESForm* weaponForm = grabbedRefr->baseForm;
-			if (!IsTrackedWeaponForm(weaponForm))
+			TESForm* itemForm = grabbedRefr->baseForm;
+
+			if (IsBowWeaponForm(itemForm))
+			{
+				const char* itemName = GetSafeFormName(itemForm);
+
+				if (IsMainHandVRController(isLeft))
+				{
+					LOG_INFO(
+						"Bow grabbed [main hand]: %s formId=%08X (auto-equip suppressed)",
+						itemName,
+						grabbedRefr->formID);
+					return;
+				}
+
+				if (ShouldSuppressGrabAutoEquip(isLeft, grabbedRefr))
+				{
+					LOG_INFO(
+						"Bow grabbed [off-hand]: %s formId=%08X (trigger hold drop, auto-equip suppressed)",
+						itemName,
+						grabbedRefr->formID);
+					return;
+				}
+
+				if (ShouldSuppressForBitingAxesWorldEmbed())
+				{
+					LOG_INFO(
+						"Bow grabbed [off-hand]: %s formId=%08X (Biting Axes world embed active, auto-equip suppressed)",
+						itemName,
+						grabbedRefr->formID);
+					return;
+				}
+
+				LOG_INFO(
+					"Bow grabbed [off-hand]: %s formId=%08X",
+					itemName,
+					grabbedRefr->formID);
+
+				ScheduleGrabbedWeaponActivation(isLeft, grabbedRefr);
+				return;
+			}
+
+			if (IsCrossbowWeaponForm(itemForm))
+			{
+				const char* itemName = GetSafeFormName(itemForm);
+
+				if (IsOffHandVRController(isLeft))
+				{
+					LOG_INFO(
+						"Crossbow grabbed [off-hand]: %s formId=%08X (auto-equip suppressed)",
+						itemName,
+						grabbedRefr->formID);
+					return;
+				}
+
+				if (ShouldSuppressGrabAutoEquip(isLeft, grabbedRefr))
+				{
+					LOG_INFO(
+						"Crossbow grabbed [main hand]: %s formId=%08X (trigger hold drop, auto-equip suppressed)",
+						itemName,
+						grabbedRefr->formID);
+					return;
+				}
+
+				if (ShouldSuppressForBitingAxesWorldEmbed())
+				{
+					LOG_INFO(
+						"Crossbow grabbed [main hand]: %s formId=%08X (Biting Axes world embed active, auto-equip suppressed)",
+						itemName,
+						grabbedRefr->formID);
+					return;
+				}
+
+				LOG_INFO(
+					"Crossbow grabbed [main hand]: %s formId=%08X",
+					itemName,
+					grabbedRefr->formID);
+
+				ScheduleGrabbedWeaponActivation(isLeft, grabbedRefr);
+				return;
+			}
+
+			if (!IsTrackedItemForm(itemForm))
 			{
 				return;
 			}
 
-			auto* weapon = DYNAMIC_CAST(weaponForm, TESForm, TESObjectWEAP);
-			if (!weapon)
-			{
-				return;
-			}
-
-			const char* typeLabel = GetTrackedWeaponTypeLabel(weapon->type());
+			const char* typeLabel = GetTrackedItemTypeLabel(itemForm);
 			if (!typeLabel)
 			{
 				return;
 			}
 
-			const char* weaponName = GetSafeFormName(weapon);
+			const char* itemName = GetSafeFormName(itemForm);
 
 			if (ShouldSuppressGrabAutoEquip(isLeft, grabbedRefr))
 			{
 				LOG_INFO(
-					"Weapon grabbed [%s hand]: %s (%s) formId=%08X (trigger hold drop, auto-equip suppressed)",
+					"Item grabbed [%s hand]: %s (%s) formId=%08X (trigger hold drop, auto-equip suppressed)",
 					isLeft ? "left" : "right",
-					weaponName,
+					itemName,
 					typeLabel,
 					grabbedRefr->formID);
 				return;
@@ -88,18 +158,18 @@ namespace SwapDropAndHoldRedux
 			if (ShouldSuppressForBitingAxesWorldEmbed())
 			{
 				LOG_INFO(
-					"Weapon grabbed [%s hand]: %s (%s) formId=%08X (Biting Axes world embed active, auto-equip suppressed)",
+					"Item grabbed [%s hand]: %s (%s) formId=%08X (Biting Axes world embed active, auto-equip suppressed)",
 					isLeft ? "left" : "right",
-					weaponName,
+					itemName,
 					typeLabel,
 					grabbedRefr->formID);
 				return;
 			}
 
 			LOG_INFO(
-				"Weapon grabbed [%s hand]: %s (%s) formId=%08X",
+				"Item grabbed [%s hand]: %s (%s) formId=%08X",
 				isLeft ? "left" : "right",
-				weaponName,
+				itemName,
 				typeLabel,
 				grabbedRefr->formID);
 
@@ -144,8 +214,9 @@ namespace SwapDropAndHoldRedux
 
 		higgsInterface->AddGrabbedCallback(OnWeaponGrabbed);
 		LOG_INFO(
-			"Weapon grab handler registered (dagger, 1H sword, 1H axe, 1H mace%s%s).",
+			"Item grab handler registered (dagger, 1H sword, 1H axe, 1H mace, off-hand bow, main-hand crossbow%s%s%s).",
 			enableStaves ? ", staff" : "",
-			enableTwoHandedWeapons ? ", 2H sword, 2H axe" : "");
+			enableTwoHandedWeapons ? ", 2H sword, 2H axe" : "",
+			enableShields ? ", shield" : "");
 	}
 }

@@ -51,6 +51,34 @@ namespace SwapDropAndHoldRedux
 		return enableStaves && IsStaffWeaponTypeRaw(weaponType);
 	}
 
+	inline bool IsBowWeaponTypeRaw(const UInt8 weaponType)
+	{
+		using WeaponType = TESObjectWEAP::GameData;
+
+		switch (weaponType)
+		{
+		case WeaponType::kType_Bow:
+		case WeaponType::kType_Bow2:
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	inline bool IsCrossbowWeaponTypeRaw(const UInt8 weaponType)
+	{
+		using WeaponType = TESObjectWEAP::GameData;
+
+		switch (weaponType)
+		{
+		case WeaponType::kType_CrossBow:
+		case WeaponType::kType_CBow:
+			return true;
+		default:
+			return false;
+		}
+	}
+
 	// WeapTypeBoundWeapon (Skyrim.esm 0x0010D501). Covers vanilla + most modded bound weapons.
 	inline bool IsBoundWeaponForm(TESForm* form)
 	{
@@ -126,8 +154,7 @@ namespace SwapDropAndHoldRedux
 		}
 	}
 
-	// Specific weapon records excluded from all Swap Drop & Hold handling.
-	// Skyrim.esm always sits at load index 00, so its full form ids are exact.
+	// Specific records excluded from all Swap Drop & Hold handling.
 	inline bool IsExcludedWeaponForm(TESForm* form)
 	{
 		if (!form)
@@ -163,6 +190,92 @@ namespace SwapDropAndHoldRedux
 
 		auto* weapon = DYNAMIC_CAST(form, TESForm, TESObjectWEAP);
 		return weapon && IsTrackedWeaponType(weapon->type());
+	}
+
+	inline bool IsBowWeaponForm(TESForm* form)
+	{
+		if (!form || form->formType != kFormType_Weapon)
+		{
+			return false;
+		}
+
+		if (IsExcludedWeaponForm(form))
+		{
+			return false;
+		}
+
+		if (IsBoundWeaponForm(form))
+		{
+			return false;
+		}
+
+		auto* weapon = DYNAMIC_CAST(form, TESForm, TESObjectWEAP);
+		return weapon && IsBowWeaponTypeRaw(weapon->type());
+	}
+
+	inline bool IsCrossbowWeaponForm(TESForm* form)
+	{
+		if (!form || form->formType != kFormType_Weapon)
+		{
+			return false;
+		}
+
+		if (IsExcludedWeaponForm(form))
+		{
+			return false;
+		}
+
+		if (IsBoundWeaponForm(form))
+		{
+			return false;
+		}
+
+		auto* weapon = DYNAMIC_CAST(form, TESForm, TESObjectWEAP);
+		return weapon && IsCrossbowWeaponTypeRaw(weapon->type());
+	}
+
+	inline bool IsShieldFormRaw(TESForm* form)
+	{
+		if (!form || form->formType != kFormType_Armor)
+		{
+			return false;
+		}
+
+		auto* armor = DYNAMIC_CAST(form, TESForm, TESObjectARMO);
+		if (!armor)
+		{
+			return false;
+		}
+
+		return (armor->bipedObject.GetSlotMask() & BGSBipedObjectForm::kPart_Shield) != 0;
+	}
+
+	inline bool IsShieldForm(TESForm* form)
+	{
+		return enableShields && IsShieldFormRaw(form);
+	}
+
+	inline bool IsTrackedShieldForm(TESForm* form)
+	{
+		if (!IsShieldForm(form))
+		{
+			return false;
+		}
+
+		return !IsExcludedWeaponForm(form);
+	}
+
+	// Swap pull uses IsSwapPullExcludedForm (shields off by default via EnableShieldSwapping).
+	inline bool IsTrackedItemForm(TESForm* form)
+	{
+		return IsTrackedWeaponForm(form) || IsTrackedShieldForm(form);
+	}
+
+	// Grab-equip and tap-then-hold drop (includes off-hand bows and main-hand
+	// crossbows; swap pull still uses IsTrackedItemForm).
+	inline bool IsGrabEquipDropItemForm(TESForm* form)
+	{
+		return IsTrackedItemForm(form) || IsBowWeaponForm(form) || IsCrossbowWeaponForm(form);
 	}
 
 	inline bool IsTwoHandedWeaponForm(TESForm* form)
@@ -220,17 +333,60 @@ namespace SwapDropAndHoldRedux
 		return false;
 	}
 
-	// Weapons excluded from the cross-body hand-swap (swap pull) feature: real 2H weapons
-	// (by animation type, regardless of the EnableTwoHandedWeapons setting) and the 2H Weapons
-	// Unlocked proxy forms. Overridden by the EnableTwoHandedHandSwapping INI setting.
+	// Shields Unlocked proxy shield (Weapon Unlocked VR.esp 0x000d62 / 04000d62).
+	// Authored as armor; always excluded from swap pull (grab-equip and drop still work).
+	inline bool IsShieldProxyForm(TESForm* form)
+	{
+		if (!form)
+		{
+			return false;
+		}
+
+		static const char* kProxyPlugin = "Weapon Unlocked VR.esp";
+		static const UInt32 kShieldProxyBaseId = 0x000d62;
+		static UInt32 s_shieldProxyFormId = 0;
+		static bool s_resolved = false;
+
+		if (!s_resolved)
+		{
+			if (!DataHandler::GetSingleton())
+			{
+				return false;
+			}
+
+			s_resolved = true;
+			s_shieldProxyFormId = GetFullFormIdMine(kProxyPlugin, kShieldProxyBaseId);
+		}
+
+		return s_shieldProxyFormId != 0 && form->formID == s_shieldProxyFormId;
+	}
+
+	// Forms excluded from cross-body swap pull: shields (unless EnableShieldSwapping),
+	// the Shields Unlocked proxy shield (always), 2H weapons and 2H Weapons Unlocked
+	// proxies (unless EnableTwoHandedHandSwapping).
 	inline bool IsSwapPullExcludedForm(TESForm* form)
 	{
+		if (!form)
+		{
+			return false;
+		}
+
+		if (IsShieldProxyForm(form))
+		{
+			return true;
+		}
+
+		if (!enableShieldSwapping && IsTrackedShieldForm(form))
+		{
+			return true;
+		}
+
 		if (enableTwoHandedHandSwapping)
 		{
 			return false;
 		}
 
-		if (!form || form->formType != kFormType_Weapon)
+		if (form->formType != kFormType_Weapon)
 		{
 			return false;
 		}
@@ -254,6 +410,17 @@ namespace SwapDropAndHoldRedux
 		return isLeftVRController;
 	}
 
+	// Right-handed VR: off-hand = left controller. Left-handed VR: off-hand = right controller.
+	inline bool IsOffHandVRController(const bool isLeftVRController)
+	{
+		return leftHandedMode ? !isLeftVRController : isLeftVRController;
+	}
+
+	inline bool IsMainHandVRController(const bool isLeftVRController)
+	{
+		return !IsOffHandVRController(isLeftVRController);
+	}
+
 	struct TrackedWeaponHandInfo
 	{
 		TESForm* weapon = nullptr;
@@ -272,7 +439,7 @@ namespace SwapDropAndHoldRedux
 
 		const bool primaryHand = VRControllerToGameHand(isLeftVRController);
 		TESForm* equipped = player->GetEquippedObject(primaryHand);
-		if (IsTrackedWeaponForm(equipped))
+		if (IsGrabEquipDropItemForm(equipped))
 		{
 			info.weapon = equipped;
 			info.isLeftGameHand = primaryHand;
@@ -323,6 +490,37 @@ namespace SwapDropAndHoldRedux
 		default:
 			return nullptr;
 		}
+	}
+
+	inline const char* GetTrackedItemTypeLabel(TESForm* form)
+	{
+		if (!form)
+		{
+			return nullptr;
+		}
+
+		if (IsTrackedShieldForm(form))
+		{
+			return "Shield";
+		}
+
+		if (IsBowWeaponForm(form))
+		{
+			return "Bow";
+		}
+
+		if (IsCrossbowWeaponForm(form))
+		{
+			return "Crossbow";
+		}
+
+		if (form->formType != kFormType_Weapon)
+		{
+			return nullptr;
+		}
+
+		auto* weapon = DYNAMIC_CAST(form, TESForm, TESObjectWEAP);
+		return weapon ? GetTrackedWeaponTypeLabel(weapon->type()) : nullptr;
 	}
 
 	// TESForm::GetName() resolves to the wrong vtable slot on Skyrim VR (lands in

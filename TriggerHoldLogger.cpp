@@ -269,6 +269,11 @@ namespace SwapDropAndHoldRedux
 
 		bool IsDropBlockedForHand(const bool isLeftVRController, TESForm* weapon)
 		{
+			if (IsInputCapturingMenuOpen())
+			{
+				return true;
+			}
+
 			if (IsSpellWheelOpenNow())
 			{
 				return true;
@@ -337,14 +342,14 @@ namespace SwapDropAndHoldRedux
 			TESForm* leftEquipped = player->GetEquippedObject(true);
 			TESForm* rightEquipped = player->GetEquippedObject(false);
 
-			if (leftEquipped && leftEquipped->formID == expectedWeaponFormID && IsTrackedWeaponForm(leftEquipped))
+			if (leftEquipped && leftEquipped->formID == expectedWeaponFormID && IsGrabEquipDropItemForm(leftEquipped))
 			{
 				outWeapon = leftEquipped;
 				outIsLeftGameHand = true;
 				return true;
 			}
 
-			if (rightEquipped && rightEquipped->formID == expectedWeaponFormID && IsTrackedWeaponForm(rightEquipped))
+			if (rightEquipped && rightEquipped->formID == expectedWeaponFormID && IsGrabEquipDropItemForm(rightEquipped))
 			{
 				outWeapon = rightEquipped;
 				outIsLeftGameHand = false;
@@ -452,7 +457,11 @@ namespace SwapDropAndHoldRedux
 
 			SetOwnerToPlayer(droppedWeapon);
 
-			if (!bothHandsSameWeapon || isTwoHandedDrop)
+			// Bows and crossbows (like 2H weapons) occupy both hand slots as a single
+			// item, so bothHandsSameWeapon does not mean two copies exist — the dropped
+			// copy must still be removed or a phantom stays in inventory and later
+			// re-grabs spawn world duplicates.
+			if (!bothHandsSameWeapon || isTwoHandedDrop || IsBowWeaponForm(item) || IsCrossbowWeaponForm(item))
 			{
 				RemoveItemFromInventory(player, item, 1, true);
 			}
@@ -769,6 +778,11 @@ namespace SwapDropAndHoldRedux
 
 		void OnPrePhysicsStep(void* /*world*/)
 		{
+			if (IsInputCapturingMenuOpen())
+			{
+				return;
+			}
+
 			static auto lastTime = std::chrono::high_resolution_clock::now();
 			const auto currentTime = std::chrono::high_resolution_clock::now();
 			float deltaTime = std::chrono::duration<float>(currentTime - lastTime).count();
@@ -784,7 +798,7 @@ namespace SwapDropAndHoldRedux
 			}
 
 			PlayerCharacter* player = *g_thePlayer;
-			if (enableDropping && player && !UpdateTwoHandedTriggerHoldState(player, deltaTime))
+			if (player && !UpdateTwoHandedTriggerHoldState(player, deltaTime))
 			{
 				UpdateHandTriggerState(true, s_leftTriggerState, deltaTime);
 				UpdateHandTriggerState(false, s_rightTriggerState, deltaTime);
@@ -812,7 +826,7 @@ namespace SwapDropAndHoldRedux
 		higgsInterface->AddDroppedCallback(OnTriggerHoldWeaponDropped);
 		s_registered = true;
 		LOG_INFO(
-			"Trigger hold drop registered (tap then hold %.2fs on %s from ini, spell wheel orb block drop%s).",
+			"Trigger hold drop registered (tap then hold %.2fs on %s from ini, spell wheel orb block drop%s, off-hand bow drop, main-hand crossbow drop).",
 			triggerHoldDropSeconds,
 			dropButtonName,
 			enableTwoHandedWeapons ? ", 2H weapons enabled" : "");

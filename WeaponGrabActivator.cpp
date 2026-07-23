@@ -135,6 +135,17 @@ namespace SwapDropAndHoldRedux
 			return RefActivate(grabbedRefr, player, 0, 0, 1, false);
 		}
 
+		TESObjectREFR* ResolveGrabbedWeaponRef(const UInt32 weaponRefID)
+		{
+			if (weaponRefID == 0)
+			{
+				return nullptr;
+			}
+
+			TESForm* refForm = LookupFormByID(weaponRefID);
+			return DYNAMIC_CAST(refForm, TESForm, TESObjectREFR);
+		}
+
 		static const int kSwapPullSettleFrames = 8;
 
 		bool TransferWeaponToOppositeHand(
@@ -148,7 +159,7 @@ namespace SwapDropAndHoldRedux
 			}
 
 			TESForm* item = LookupFormByID(expectedWeaponFormID);
-			if (!item || !IsTrackedWeaponForm(item) || !item->Has3D())
+			if (!item || !IsTrackedItemForm(item) || !item->Has3D())
 			{
 				return false;
 			}
@@ -275,7 +286,7 @@ namespace SwapDropAndHoldRedux
 				return true;
 			}
 
-			if (!IsTrackedWeaponForm(item))
+			if (!IsTrackedItemForm(item))
 			{
 				return false;
 			}
@@ -424,10 +435,19 @@ namespace SwapDropAndHoldRedux
 				}
 
 				EquipWeaponToGrabHand(player, weaponForm, m_isLeftGameHand);
-				ScheduleWeaponDrawMaintenance(m_isLeftGameHand, IsTwoHandedWeaponForm(weaponForm));
+				if (IsCrossbowWeaponForm(weaponForm))
+				{
+					// Same-frame draw is swallowed by the crossbow cocking sequence;
+					// use the delayed re-check variant so it equips drawn/visible.
+					ScheduleDelayedWeaponDrawMaintenance();
+				}
+				else if (IsTrackedWeaponForm(weaponForm) || IsBowWeaponForm(weaponForm))
+				{
+					ScheduleWeaponDrawMaintenance(m_isLeftGameHand, IsTwoHandedWeaponForm(weaponForm));
+				}
 
 				LOG_INFO(
-					"Weapon equipped to %s hand: %s formId=%08X",
+					"Item equipped to %s hand: %s formId=%08X",
 					m_isLeftGameHand ? "left" : "right",
 					GetSafeFormName(weaponForm),
 					m_weaponFormID);
@@ -445,6 +465,16 @@ namespace SwapDropAndHoldRedux
 			UInt32 m_weaponFormID;
 			int m_settleFramesRemaining;
 		};
+
+		void ScheduleGrabEquipAfterPickup(const bool isLeftGameHand, const UInt32 weaponFormID, const UInt32 weaponRefID)
+		{
+			EndPendingPickup(weaponRefID);
+
+			if (g_task)
+			{
+				g_task->AddTask(new EquipGrabbedWeaponTask(isLeftGameHand, weaponFormID));
+			}
+		}
 
 		class SwapPullEquipTask : public TaskDelegate
 		{
@@ -473,7 +503,7 @@ namespace SwapDropAndHoldRedux
 			{
 				PlayerCharacter* player = *g_thePlayer;
 				TESForm* weaponForm = LookupFormByID(m_weaponFormID);
-				if (!player || !weaponForm || !IsTrackedWeaponForm(weaponForm))
+				if (!player || !weaponForm || !IsTrackedItemForm(weaponForm))
 				{
 					return;
 				}
@@ -531,15 +561,17 @@ namespace SwapDropAndHoldRedux
 					return;
 				}
 
-				ScheduleWeaponDrawMaintenance(isLeftDestHand, IsTwoHandedWeaponForm(weaponForm));
+				if (IsTrackedWeaponForm(weaponForm))
+				{
+					ScheduleWeaponDrawMaintenance(isLeftDestHand, IsTwoHandedWeaponForm(weaponForm));
+				}
 
-				auto* weapon = DYNAMIC_CAST(weaponForm, TESForm, TESObjectWEAP);
-				const char* typeLabel = weapon ? GetTrackedWeaponTypeLabel(weapon->type()) : nullptr;
+				const char* typeLabel = GetTrackedItemTypeLabel(weaponForm);
 
 				LOG_INFO(
 					"Swap pull complete: moved %s (%s) from %s hand to %s hand formId=%08X pullSpeed=%.1f",
 					GetSafeFormName(weaponForm),
-					typeLabel ? typeLabel : "Weapon",
+					typeLabel ? typeLabel : "Item",
 					m_isLeftSourceHand ? "left" : "right",
 					isLeftDestHand ? "left" : "right",
 					m_weaponFormID,
@@ -588,26 +620,27 @@ namespace SwapDropAndHoldRedux
 					return;
 				}
 
-				if (ItemInInventory(player, weaponForm))
-				{
-					EndPendingPickup(m_weaponRefID);
-					if (g_task)
-					{
-						g_task->AddTask(new EquipGrabbedWeaponTask(m_isLeftGameHand, m_weaponFormID));
-					}
-					return;
-				}
-
-				TESObjectREFR* weaponRef = nullptr;
-				if (m_weaponRefID != 0)
-				{
-					TESForm* refForm = LookupFormByID(m_weaponRefID);
-					weaponRef = DYNAMIC_CAST(refForm, TESForm, TESObjectREFR);
-				}
+				TESObjectREFR* weaponRef = ResolveGrabbedWeaponRef(m_weaponRefID);
+				const bool worldRefAlive = weaponRef && !(weaponRef->flags & TESForm::kFlagIsDeleted);
 
 				if (!m_activateAttempted)
 				{
-					if (!weaponRef)
+					if (worldRefAlive)
+					{
+						// The grabbed world ref is a real physical item — always consume it,
+						// even if the base form is already in inventory. Skipping Activate
+						// here left the ref in the HIGGS hand and it fell to the ground as
+						// a duplicate on release (bow drop/re-grab cycles hit this).
+						ActivateGrabbedRef(weaponRef, player);
+						m_activateAttempted = true;
+					}
+					else if (ItemInInventory(player, weaponForm))
+					{
+						// Ref already consumed (by us or another mod) — just equip.
+						ScheduleGrabEquipAfterPickup(m_isLeftGameHand, m_weaponFormID, m_weaponRefID);
+						return;
+					}
+					else
 					{
 						// World ref already gone and item never arrived — do NOT AddItem
 						// (that was spawning free duplicates when Activate had already run).
@@ -618,18 +651,11 @@ namespace SwapDropAndHoldRedux
 						EndPendingPickup(m_weaponRefID);
 						return;
 					}
-
-					ActivateGrabbedRef(weaponRef, player);
-					m_activateAttempted = true;
 				}
 
 				if (ItemInInventory(player, weaponForm))
 				{
-					EndPendingPickup(m_weaponRefID);
-					if (g_task)
-					{
-						g_task->AddTask(new EquipGrabbedWeaponTask(m_isLeftGameHand, m_weaponFormID));
-					}
+					ScheduleGrabEquipAfterPickup(m_isLeftGameHand, m_weaponFormID, m_weaponRefID);
 					return;
 				}
 
@@ -692,18 +718,19 @@ namespace SwapDropAndHoldRedux
 		const UInt32 weaponFormID,
 		const float pullSpeed)
 	{
-		if (!g_task || weaponFormID == 0 || !enableSwapping)
+		if (!g_task || weaponFormID == 0)
 		{
 			return;
 		}
 
 		// No hand swapping for 2H weapons, including the 2H Weapons Unlocked
-		// greatsword/warhammer/battleaxe proxy forms (authored as 1H weapons).
+		// greatsword/warhammer/battleaxe proxy forms (authored as 1H weapons),
+		// unless EnableTwoHandedHandSwapping is set in the ini.
 		TESForm* weaponForm = LookupFormByID(weaponFormID);
 		if (IsSwapPullExcludedForm(weaponForm))
 		{
 			LOG_INFO(
-				"Swap pull suppressed for 2H weapon/proxy: %s formId=%08X",
+				"Swap pull suppressed: %s formId=%08X",
 				GetSafeFormName(weaponForm),
 				weaponFormID);
 			return;
