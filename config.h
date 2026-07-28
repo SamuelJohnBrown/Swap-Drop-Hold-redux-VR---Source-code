@@ -35,8 +35,10 @@ namespace SwapDropAndHoldRedux {
 	extern bool enableTwoHandedWeapons;
 	extern bool enableTwoHandedHandSwapping;
 	extern bool enableStaves;
+	extern bool enableTorches;
 	extern bool enableShields;
 	extern bool enableShieldSwapping;
+	extern bool requireDoubleTapForBowCrossbowDrop;
 	extern int dropButtonId;
 	extern const char* dropButtonName;
 

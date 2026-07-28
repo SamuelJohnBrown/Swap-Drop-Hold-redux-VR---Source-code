@@ -131,6 +131,46 @@ namespace SwapDropAndHoldRedux
 				return;
 			}
 
+			if (IsTorchLightForm(itemForm))
+			{
+				const char* itemName = GetSafeFormName(itemForm);
+
+				if (IsMainHandVRController(isLeft))
+				{
+					LOG_INFO(
+						"Torch grabbed [main hand]: %s formId=%08X (auto-equip suppressed)",
+						itemName,
+						grabbedRefr->formID);
+					return;
+				}
+
+				if (ShouldSuppressGrabAutoEquip(isLeft, grabbedRefr))
+				{
+					LOG_INFO(
+						"Torch grabbed [off-hand]: %s formId=%08X (trigger hold drop, auto-equip suppressed)",
+						itemName,
+						grabbedRefr->formID);
+					return;
+				}
+
+				if (ShouldSuppressForBitingAxesWorldEmbed())
+				{
+					LOG_INFO(
+						"Torch grabbed [off-hand]: %s formId=%08X (Biting Axes world embed active, auto-equip suppressed)",
+						itemName,
+						grabbedRefr->formID);
+					return;
+				}
+
+				LOG_INFO(
+					"Torch grabbed [off-hand]: %s formId=%08X",
+					itemName,
+					grabbedRefr->formID);
+
+				ScheduleGrabbedWeaponActivation(isLeft, grabbedRefr);
+				return;
+			}
+
 			if (!IsTrackedItemForm(itemForm))
 			{
 				return;
@@ -214,8 +254,9 @@ namespace SwapDropAndHoldRedux
 
 		higgsInterface->AddGrabbedCallback(OnWeaponGrabbed);
 		LOG_INFO(
-			"Item grab handler registered (dagger, 1H sword, 1H axe, 1H mace, off-hand bow, main-hand crossbow%s%s%s).",
+			"Item grab handler registered (dagger, 1H sword, 1H axe, 1H mace, off-hand bow, main-hand crossbow%s%s%s%s).",
 			enableStaves ? ", staff" : "",
+			enableTorches ? ", off-hand torch" : "",
 			enableTwoHandedWeapons ? ", 2H sword, 2H axe" : "",
 			enableShields ? ", shield" : "");
 	}

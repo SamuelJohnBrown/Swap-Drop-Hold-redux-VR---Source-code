@@ -14,8 +14,10 @@ namespace SwapDropAndHoldRedux {
 	bool enableTwoHandedWeapons = false;
 	bool enableTwoHandedHandSwapping = false;
 	bool enableStaves = true;
+	bool enableTorches = false;
 	bool enableShields = true;
 	bool enableShieldSwapping = false;
+	bool requireDoubleTapForBowCrossbowDrop = true;
 	int dropButtonId = 33; // OpenVR k_EButton_SteamVR_Trigger / Axis1
 	const char* dropButtonName = "Trigger";
 
@@ -331,6 +333,10 @@ namespace SwapDropAndHoldRedux {
                         {
                             enableStaves = ParseBoolSetting(variableValueStr);
                         }
+                        else if (variableName == "EnableTorches")
+                        {
+                            enableTorches = ParseBoolSetting(variableValueStr);
+                        }
                         else if (variableName == "EnableShields")
                         {
                             enableShields = ParseBoolSetting(variableValueStr);
@@ -338,6 +344,10 @@ namespace SwapDropAndHoldRedux {
                         else if (variableName == "EnableShieldSwapping")
                         {
                             enableShieldSwapping = ParseBoolSetting(variableValueStr);
+                        }
+                        else if (variableName == "RequireDoubleTapForBowCrossbowDrop")
+                        {
+                            requireDoubleTapForBowCrossbowDrop = ParseBoolSetting(variableValueStr);
                         }
                         else if (variableName == "DropButton")
                         {
@@ -379,12 +389,14 @@ namespace SwapDropAndHoldRedux {
 			}
 
             _MESSAGE(
-                "Config file is loaded successfully (EnableTwoHandedWeapons=%s, EnableTwoHandedHandSwapping=%s, EnableStaves=%s, EnableShields=%s, EnableShieldSwapping=%s, DropButton=%s id=%d, ExcludedForms=%zu).",
+                "Config file is loaded successfully (EnableTwoHandedWeapons=%s, EnableTwoHandedHandSwapping=%s, EnableStaves=%s, EnableTorches=%s, EnableShields=%s, EnableShieldSwapping=%s, RequireDoubleTapForBowCrossbowDrop=%s, DropButton=%s id=%d, ExcludedForms=%zu).",
                 enableTwoHandedWeapons ? "true" : "false",
                 enableTwoHandedHandSwapping ? "true" : "false",
                 enableStaves ? "true" : "false",
+                enableTorches ? "true" : "false",
                 enableShields ? "true" : "false",
                 enableShieldSwapping ? "true" : "false",
+                requireDoubleTapForBowCrossbowDrop ? "true" : "false",
                 dropButtonName,
                 dropButtonId,
                 excludedFormEntries.size());

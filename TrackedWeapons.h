@@ -281,6 +281,18 @@ namespace SwapDropAndHoldRedux
 		return weapon && IsCrossbowWeaponTypeRaw(weapon->type());
 	}
 
+	inline bool IsTorchLightForm(TESForm* form)
+	{
+		if (!enableTorches || !form)
+		{
+			return false;
+		}
+
+		// Torches are Light forms (LIGH). Treat enabled light grabs as torch-style
+		// grab-equip/drop items; they are intentionally excluded from swap pull.
+		return form->formType == kFormType_Light && !IsExcludedWeaponForm(form);
+	}
+
 	inline bool IsShieldFormRaw(TESForm* form)
 	{
 		if (!form || form->formType != kFormType_Armor)
@@ -318,11 +330,12 @@ namespace SwapDropAndHoldRedux
 		return IsTrackedWeaponForm(form) || IsTrackedShieldForm(form);
 	}
 
-	// Grab-equip and tap-then-hold drop (includes off-hand bows and main-hand
-	// crossbows; swap pull still uses IsTrackedItemForm).
+	// Grab-equip and tap-then-hold drop (includes off-hand bows, main-hand
+	// crossbows, and optional off-hand torches; swap pull still uses
+	// IsTrackedItemForm).
 	inline bool IsGrabEquipDropItemForm(TESForm* form)
 	{
-		return IsTrackedItemForm(form) || IsBowWeaponForm(form) || IsCrossbowWeaponForm(form);
+		return IsTrackedItemForm(form) || IsBowWeaponForm(form) || IsCrossbowWeaponForm(form) || IsTorchLightForm(form);
 	}
 
 	inline bool IsTwoHandedWeaponForm(TESForm* form)
@@ -559,6 +572,11 @@ namespace SwapDropAndHoldRedux
 		if (IsCrossbowWeaponForm(form))
 		{
 			return "Crossbow";
+		}
+
+		if (IsTorchLightForm(form))
+		{
+			return "Torch";
 		}
 
 		if (form->formType != kFormType_Weapon)

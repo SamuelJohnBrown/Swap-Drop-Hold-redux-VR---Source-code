@@ -78,6 +78,7 @@ namespace SwapDropAndHoldRedux
 			float tapPressTime = 0.0f;
 			float tapArmedRemaining = 0.0f;
 			float holdTime = 0.0f;
+			int tapsCompleted = 0;
 			bool actionedThisHold = false;
 			bool wasPressed = false;
 			bool wasSecondaryActive = false;
@@ -87,6 +88,43 @@ namespace SwapDropAndHoldRedux
 
 		static const float kMaxTapSeconds = 0.35f;
 		static const float kTapArmWindowSeconds = 2.0f;
+		// Max gap between the rapid taps required for bow/crossbow drops.
+		static const float kNextTapWindowSeconds = 0.5f;
+
+		// Bows/crossbows use the trigger for arrow nocking and firing — require a
+		// rapid double tap before the hold so archery doesn't cause accidental drops.
+		int RequiredTapCount(TESForm* equipped)
+		{
+			if (IsBowWeaponForm(equipped) || IsCrossbowWeaponForm(equipped))
+			{
+				return requireDoubleTapForBowCrossbowDrop ? 2 : 1;
+			}
+
+			return 1;
+		}
+
+		// Bows occupy both hand slots, so both controllers would otherwise resolve
+		// them for the drop gesture. Restrict to the hand that owns the weapon:
+		// bows drop from the off-hand controller only, crossbows from the main hand.
+		bool IsDropAllowedFromController(TESForm* equipped, const bool isLeftVRController)
+		{
+			if (IsBowWeaponForm(equipped))
+			{
+				return IsOffHandVRController(isLeftVRController);
+			}
+
+			if (IsCrossbowWeaponForm(equipped))
+			{
+				return IsMainHandVRController(isLeftVRController);
+			}
+
+			if (IsTorchLightForm(equipped))
+			{
+				return IsOffHandVRController(isLeftVRController);
+			}
+
+			return true;
+		}
 
 		static HandTriggerState s_leftTriggerState;
 		static HandTriggerState s_rightTriggerState;
@@ -103,6 +141,7 @@ namespace SwapDropAndHoldRedux
 			{
 				state.phase = HandTriggerState::kIdle;
 				state.tapArmedRemaining = 0.0f;
+				state.tapsCompleted = 0;
 			}
 		}
 
@@ -581,8 +620,13 @@ namespace SwapDropAndHoldRedux
 				{
 					if (state.tapPressTime > 0.0f && state.tapPressTime <= kMaxTapSeconds)
 					{
+						state.tapsCompleted += 1;
 						state.phase = HandTriggerState::kTapArmed;
-						state.tapArmedRemaining = kTapArmWindowSeconds;
+						// More taps still needed (bow/crossbow double tap): allow only a
+						// short gap. Final tap done: normal window for the hold press.
+						state.tapArmedRemaining = (state.tapsCompleted >= RequiredTapCount(equipped))
+							? kTapArmWindowSeconds
+							: kNextTapWindowSeconds;
 					}
 					else
 					{
@@ -652,6 +696,24 @@ namespace SwapDropAndHoldRedux
 
 			if (state.phase == HandTriggerState::kTapArmed)
 			{
+				if (state.tapsCompleted < RequiredTapCount(equipped))
+				{
+					// Not enough rapid taps yet (bow/crossbow double tap) —
+					// treat this press as the next tap, not the hold.
+					state.phase = HandTriggerState::kTapPressing;
+					state.tapPressTime = deltaTime;
+					state.holdTime = 0.0f;
+					state.actionedThisHold = false;
+					if (!IsTwoHandedWeaponForm(equipped) &&
+						(state.secondaryHeldBeforePrimary || secondaryActive))
+					{
+						state.spellWheelBlocked = true;
+					}
+					state.wasPressed = true;
+					state.wasSecondaryActive = secondaryActive;
+					return;
+				}
+
 				state.phase = HandTriggerState::kHoldPressing;
 				state.holdTime = 0.0f;
 				state.actionedThisHold = false;
@@ -760,6 +822,11 @@ namespace SwapDropAndHoldRedux
 			const TrackedWeaponHandInfo tracked = GetTrackedWeaponForVRController(player, isLeftVRController);
 			TESForm* equipped = tracked.weapon;
 
+			if (equipped && !IsDropAllowedFromController(equipped, isLeftVRController))
+			{
+				equipped = nullptr;
+			}
+
 			bool triggerPressed = false;
 			bool gripActive = false;
 			bool dropButtonPressed = false;
@@ -826,7 +893,7 @@ namespace SwapDropAndHoldRedux
 		higgsInterface->AddDroppedCallback(OnTriggerHoldWeaponDropped);
 		s_registered = true;
 		LOG_INFO(
-			"Trigger hold drop registered (tap then hold %.2fs on %s from ini, spell wheel orb block drop%s, off-hand bow drop, main-hand crossbow drop).",
+			"Trigger hold drop registered (tap then hold %.2fs on %s from ini, spell wheel orb block drop%s, off-hand bow drop, main-hand crossbow drop, optional off-hand torch drop, bows/crossbows need rapid double tap then hold).",
 			triggerHoldDropSeconds,
 			dropButtonName,
 			enableTwoHandedWeapons ? ", 2H weapons enabled" : "");
