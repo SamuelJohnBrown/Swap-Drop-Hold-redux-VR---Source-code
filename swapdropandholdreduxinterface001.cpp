@@ -23,7 +23,7 @@ namespace SwapDropAndHoldReduxAPI
 
 			unsigned int GetBuildNumber() override
 			{
-				return 1;
+				return 2;
 			}
 
 			void AddWeaponGrabEquippedCallback(WeaponHandEventCallback callback) override
@@ -66,6 +66,14 @@ namespace SwapDropAndHoldReduxAPI
 				}
 			}
 
+			void AddWeaponGrabPickupInterceptCallback(WeaponGrabPickupInterceptCallback callback) override
+			{
+				if (callback)
+				{
+					_grabPickupInterceptCallbacks.push_back(callback);
+				}
+			}
+
 			void NotifyWeaponGrabEquipped(const WeaponHandEvent& event)
 			{
 				DispatchEvent(event, _grabEquippedCallbacks);
@@ -84,6 +92,18 @@ namespace SwapDropAndHoldReduxAPI
 			bool QueryWeaponGrabEquipIntercept(const WeaponHandEvent& event)
 			{
 				for (auto* callback : _grabEquipInterceptCallbacks)
+				{
+					if (callback && callback(event))
+					{
+						return true;
+					}
+				}
+				return false;
+			}
+
+			bool QueryWeaponGrabPickupIntercept(const WeaponHandEvent& event)
+			{
+				for (auto* callback : _grabPickupInterceptCallbacks)
 				{
 					if (callback && callback(event))
 					{
@@ -112,6 +132,7 @@ namespace SwapDropAndHoldReduxAPI
 			std::vector<WeaponHandEventCallback> _swapPullCompleteCallbacks;
 			std::vector<WeaponHandEventCallback> _allEventCallbacks;
 			std::vector<WeaponGrabEquipInterceptCallback> _grabEquipInterceptCallbacks;
+			std::vector<WeaponGrabPickupInterceptCallback> _grabPickupInterceptCallbacks;
 		};
 
 		void* GetApiFunction(unsigned int revisionNumber)
@@ -193,7 +214,7 @@ namespace SwapDropAndHoldReduxAPI
 		{
 			s_registered = true;
 			_MESSAGE(
-				"Swap Drop & Hold redux: mod-support API registered (revision 1, build 1, recipient \"%s\").",
+				"Swap Drop & Hold redux: mod-support API registered (revision 1, build 2, recipient \"%s\").",
 				kInterfaceRecipient);
 		}
 		else
@@ -220,5 +241,10 @@ namespace SwapDropAndHoldReduxAPI
 	bool QueryWeaponGrabEquipIntercept(const WeaponHandEvent& event)
 	{
 		return SwapDropAndHoldReduxInterface001::GetSingleton().QueryWeaponGrabEquipIntercept(event);
+	}
+
+	bool QueryWeaponGrabPickupIntercept(const WeaponHandEvent& event)
+	{
+		return SwapDropAndHoldReduxInterface001::GetSingleton().QueryWeaponGrabPickupIntercept(event);
 	}
 }

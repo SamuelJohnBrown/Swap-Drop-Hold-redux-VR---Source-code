@@ -154,6 +154,51 @@ namespace SwapDropAndHoldRedux
 		}
 	}
 
+	// Plugin-relative exclusions (built-in defaults + ini ExcludedForms entries),
+	// resolved to runtime form ids once the game data is loaded.
+	inline bool IsConfiguredExcludedFormId(const UInt32 formID)
+	{
+		static std::unordered_set<UInt32> s_resolvedIds;
+		static bool s_resolved = false;
+
+		if (!s_resolved)
+		{
+			if (excludedFormEntries.empty())
+			{
+				return false;
+			}
+
+			if (!DataHandler::GetSingleton())
+			{
+				return false;
+			}
+
+			s_resolved = true;
+			for (const FormExclusionEntry& entry : excludedFormEntries)
+			{
+				const UInt32 fullFormId = GetFullFormIdMine(entry.espName.c_str(), entry.baseFormId);
+				if (fullFormId != 0)
+				{
+					s_resolvedIds.insert(fullFormId);
+					LOG_INFO(
+						"Form exclusion active: %s : %06X -> runtime formId=%08X",
+						entry.espName.c_str(),
+						entry.baseFormId,
+						fullFormId);
+				}
+				else
+				{
+					LOG_INFO(
+						"Form exclusion skipped (plugin not loaded): %s : %06X",
+						entry.espName.c_str(),
+						entry.baseFormId);
+				}
+			}
+		}
+
+		return s_resolvedIds.find(formID) != s_resolvedIds.end();
+	}
+
 	// Specific records excluded from all Swap Drop & Hold handling.
 	inline bool IsExcludedWeaponForm(TESForm* form)
 	{
@@ -167,8 +212,10 @@ namespace SwapDropAndHoldRedux
 		case 0x000426C8: // Shiv (Skyrim.esm)
 			return true;
 		default:
-			return false;
+			break;
 		}
+
+		return IsConfiguredExcludedFormId(form->formID);
 	}
 
 	inline bool IsTrackedWeaponForm(TESForm* form)

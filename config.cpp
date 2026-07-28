@@ -19,6 +19,11 @@ namespace SwapDropAndHoldRedux {
 	int dropButtonId = 33; // OpenVR k_EButton_SteamVR_Trigger / Axis1
 	const char* dropButtonName = "Trigger";
 
+	// Built-in defaults; ini ExcludedForms entries are appended to this list.
+	std::vector<FormExclusionEntry> excludedFormEntries = {
+		{ "VR_ImmersiveSmithing.esp", 0x005901 }, // Blacksmith Hammer
+	};
+
 	namespace
 	{
 		bool ParseBoolSetting(const std::string& rawValue)
@@ -43,6 +48,85 @@ namespace SwapDropAndHoldRedux {
 			std::transform(value.begin(), value.end(), value.begin(),
 				[](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 			return value;
+		}
+
+		std::string TrimAndStripComment(const std::string& rawValue)
+		{
+			std::string value = rawValue;
+			const size_t commentPos = value.find_first_of(";#");
+			if (commentPos != std::string::npos)
+			{
+				value.erase(commentPos);
+			}
+			value.erase(0, value.find_first_not_of(" \t\r\n"));
+			const size_t lastChar = value.find_last_not_of(" \t\r\n");
+			value.erase(lastChar == std::string::npos ? 0 : lastChar + 1);
+			return value;
+		}
+
+		// Accepts "Plugin.esp:0xFORMID" or "Plugin.esp|FORMID" tokens separated by
+		// commas. Form ids are hex, with or without the 0x prefix, and are masked
+		// to the plugin-relative base id (load-order prefix is ignored).
+		void ParseExcludedFormsList(const std::string& rawValue)
+		{
+			const std::string value = TrimAndStripComment(rawValue);
+			if (value.empty())
+			{
+				return;
+			}
+
+			size_t tokenStart = 0;
+			while (tokenStart <= value.size())
+			{
+				size_t tokenEnd = value.find(',', tokenStart);
+				if (tokenEnd == std::string::npos)
+				{
+					tokenEnd = value.size();
+				}
+
+				std::string token = TrimAndStripComment(value.substr(tokenStart, tokenEnd - tokenStart));
+				tokenStart = tokenEnd + 1;
+
+				if (token.empty())
+				{
+					continue;
+				}
+
+				const size_t sepPos = token.find_last_of(":|");
+				if (sepPos == std::string::npos || sepPos == 0 || sepPos + 1 >= token.size())
+				{
+					_MESSAGE("ExcludedForms: skipping malformed entry \"%s\" (expected Plugin.esp:0xFORMID).", token.c_str());
+					continue;
+				}
+
+				std::string espName = TrimAndStripComment(token.substr(0, sepPos));
+				std::string formIdStr = TrimAndStripComment(token.substr(sepPos + 1));
+				if (espName.empty() || formIdStr.empty())
+				{
+					_MESSAGE("ExcludedForms: skipping malformed entry \"%s\" (expected Plugin.esp:0xFORMID).", token.c_str());
+					continue;
+				}
+
+				UInt32 baseFormId = 0;
+				try
+				{
+					baseFormId = static_cast<UInt32>(std::stoul(formIdStr, nullptr, 16)) & 0x00FFFFFF;
+				}
+				catch (...)
+				{
+					_MESSAGE("ExcludedForms: skipping entry \"%s\" — could not parse form id \"%s\" as hex.", token.c_str(), formIdStr.c_str());
+					continue;
+				}
+
+				if (baseFormId == 0)
+				{
+					_MESSAGE("ExcludedForms: skipping entry \"%s\" — form id resolved to 0.", token.c_str());
+					continue;
+				}
+
+				excludedFormEntries.push_back({ espName, baseFormId });
+				_MESSAGE("ExcludedForms: added exclusion %s : %06X.", espName.c_str(), baseFormId);
+			}
 		}
 
 		bool TryParseDropButton(const std::string& rawValue, int& outButtonId, const char*& outName)
@@ -279,6 +363,11 @@ namespace SwapDropAndHoldRedux {
 							// Legacy alias for DropButton=Grip
                             legacyUseGripForDrop = ParseBoolSetting(variableValueStr);
                         }
+                        else if (variableName == "ExcludedForms" || variableName == "ExcludedForm")
+                        {
+                            // Repeatable; each line's entries append to the built-in list.
+                            ParseExcludedFormsList(variableValueStr);
+                        }
                     }                    
                 } 
             }
@@ -290,14 +379,15 @@ namespace SwapDropAndHoldRedux {
 			}
 
             _MESSAGE(
-                "Config file is loaded successfully (EnableTwoHandedWeapons=%s, EnableTwoHandedHandSwapping=%s, EnableStaves=%s, EnableShields=%s, EnableShieldSwapping=%s, DropButton=%s id=%d).",
+                "Config file is loaded successfully (EnableTwoHandedWeapons=%s, EnableTwoHandedHandSwapping=%s, EnableStaves=%s, EnableShields=%s, EnableShieldSwapping=%s, DropButton=%s id=%d, ExcludedForms=%zu).",
                 enableTwoHandedWeapons ? "true" : "false",
                 enableTwoHandedHandSwapping ? "true" : "false",
                 enableStaves ? "true" : "false",
                 enableShields ? "true" : "false",
                 enableShieldSwapping ? "true" : "false",
                 dropButtonName,
-                dropButtonId);
+                dropButtonId,
+                excludedFormEntries.size());
             return;
         }
         return;

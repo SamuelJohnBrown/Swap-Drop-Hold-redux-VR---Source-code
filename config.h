@@ -40,6 +40,16 @@ namespace SwapDropAndHoldRedux {
 	extern int dropButtonId;
 	extern const char* dropButtonName;
 
+	// Weapons excluded from all Swap Drop & Hold handling, identified by owning
+	// plugin + base form id (load-order independent). Built-in defaults plus
+	// ini entries: ExcludedForms = Plugin.esp:0xFORMID, Other.esp:0xFORMID
+	struct FormExclusionEntry
+	{
+		std::string espName;
+		UInt32 baseFormId;
+	};
+	extern std::vector<FormExclusionEntry> excludedFormEntries;
+
 	void loadConfig();
 	
 	void Log(const int msgLogLevel, const char* fmt, ...);

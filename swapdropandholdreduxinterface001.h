@@ -20,6 +20,7 @@ namespace SwapDropAndHoldReduxAPI
 		kWeaponGrabEquipped = 1,
 		kTriggerHoldDropped = 2,
 		kSwapPullComplete = 3,
+		kWeaponGrabPickup = 4,
 	};
 
 	// Snapshot passed to all weapon-hand callbacks.
@@ -45,11 +46,16 @@ namespace SwapDropAndHoldReduxAPI
 		// and equip through their own pipeline (e.g. Weapon Unlocked VR 2H proxy conversion).
 		typedef bool (*WeaponGrabEquipInterceptCallback)(const WeaponHandEvent& event);
 
+		// Return true to skip SDHR's default Activate (inventory pickup) for this grab. Runs before
+		// the world ref is consumed, so the item can stay a physical HIGGS-held object.
+		typedef bool (*WeaponGrabPickupInterceptCallback)(const WeaponHandEvent& event);
+
 		virtual void AddWeaponGrabEquippedCallback(WeaponHandEventCallback callback) = 0;
 		virtual void AddTriggerHoldDroppedCallback(WeaponHandEventCallback callback) = 0;
 		virtual void AddSwapPullCompleteCallback(WeaponHandEventCallback callback) = 0;
 		virtual void AddWeaponHandEventCallback(WeaponHandEventCallback callback) = 0;
 		virtual void AddWeaponGrabEquipInterceptCallback(WeaponGrabEquipInterceptCallback callback) = 0;
+		virtual void AddWeaponGrabPickupInterceptCallback(WeaponGrabPickupInterceptCallback callback) = 0;
 	};
 
 	ISwapDropAndHoldReduxInterface001* GetSwapDropAndHoldReduxInterface001(
@@ -69,4 +75,8 @@ namespace SwapDropAndHoldReduxAPI
 	// Provider-side: ask registered interceptors whether they handled the equip. If any returns true,
 	// the grab/swap code path skips its default EquipItem / hand transfer.
 	bool QueryWeaponGrabEquipIntercept(const WeaponHandEvent& event);
+
+	// Provider-side: ask registered interceptors whether they handled pickup. If any returns true,
+	// the grab code path skips Activate (inventory pickup) and does not schedule equip.
+	bool QueryWeaponGrabPickupIntercept(const WeaponHandEvent& event);
 }

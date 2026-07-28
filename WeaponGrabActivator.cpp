@@ -625,6 +625,24 @@ namespace SwapDropAndHoldRedux
 
 				if (!m_activateAttempted)
 				{
+					SwapDropAndHoldReduxAPI::WeaponHandEvent pickupEvent{};
+					pickupEvent.eventType = SwapDropAndHoldReduxAPI::kWeaponGrabPickup;
+					pickupEvent.isLeftGameHand = m_isLeftGameHand;
+					pickupEvent.isLeftVRController = GameHandToVRController(m_isLeftGameHand);
+					pickupEvent.sourceIsLeftGameHand = m_isLeftGameHand;
+					pickupEvent.weaponFormID = m_weaponFormID;
+					pickupEvent.weaponRefID = m_weaponRefID;
+
+					if (SwapDropAndHoldReduxAPI::QueryWeaponGrabPickupIntercept(pickupEvent))
+					{
+						LOG_INFO(
+							"Grab pickup intercepted by mod API (skipped inventory activate): formId=%08X refId=%08X",
+							m_weaponFormID,
+							m_weaponRefID);
+						EndPendingPickup(m_weaponRefID);
+						return;
+					}
+
 					if (worldRefAlive)
 					{
 						// The grabbed world ref is a real physical item — always consume it,
