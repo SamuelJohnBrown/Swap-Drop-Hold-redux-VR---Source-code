@@ -4,12 +4,27 @@
 #include <string>
 #include <xbyak/xbyak.h>
 
-#include "skse64/PluginAPI.h"	
+#include "skse64/PluginAPI.h"
 #include "Engine.h"
 #include "WeaponGrabLogger.h"
 #include "WeaponDrawHandler.h"
 #include "TriggerHoldLogger.h"
 #include "OppositeHandGrabLogger.h"
+#include "GripHold.h"
+#include "BlinkHoldBack.h"
+#include "EmbedPins.h"
+#include "SilentEquip.h"
+#include "Exclusions.h"
+#include "McmBridge.h"
+#include "CellLoadGuard.h"
+#include "McmWatch.h"
+#include "HapticCensus.h"
+#include "GrabGripProvider.h"
+#include "MenuGrip.h"
+#include "HiggsRelease.h"
+#include "VrikHolsterApi.h"
+#include "WeaponThrowButtons.h"
+#include "GameGripGuard.h"
 #include "config.h"
 #include "swapdropandholdreduxinterface001.h"
 
@@ -31,6 +46,11 @@ namespace SwapDropAndHoldRedux
 	{
 		_MESSAGE("Building Event Sinks...");
 		RegisterWeaponDrawHandler();
+		RegisterMcmBridge();
+		RegisterExclusions(g_messaging);
+		RegisterVrikHolsterEvents(g_messaging);
+		RegisterMenuGripMenuListener();
+		RegisterCellLoadGuard();
 	}
 
 	extern "C" {
@@ -86,6 +106,13 @@ namespace SwapDropAndHoldRedux
 
 		static const size_t TRAMPOLINE_SIZE = 256;
 
+		// Listener for messages from ANY sender. IWP >= 1.7.2 broadcasts its interface
+		// this way because name-addressed dispatch fails on SkyrimVR's SKSE.
+		void OnAnySenderMessage(SKSEMessagingInterface::Message* msg)
+		{
+			SwapDropAndHoldRedux::AcceptIwpInterfaceOffer(msg);
+		}
+
 		//Listener for SKSE Messages
 		void OnSKSEMessage(SKSEMessagingInterface::Message* msg)
 		{
@@ -101,6 +128,15 @@ namespace SwapDropAndHoldRedux
 				{
 					SwapDropAndHoldReduxAPI::RegisterSwapDropAndHoldReduxInterface(g_pluginHandle, g_messaging);
 					SwapDropAndHoldRedux::loadConfig();
+					// A second offer, for a grip driver whose listener was not up at PostPostLoad.
+					SwapDropAndHoldRedux::GrabGripBroadcastOffer(g_pluginHandle, g_messaging, "DataLoaded");
+					SwapDropAndHoldRedux::GripHoldOnSettingsReloaded();
+					SwapDropAndHoldRedux::CellLoadGuardReset();
+
+					// Only here is there a load order to ask about.
+					SwapDropAndHoldRedux::ReportMcmChain();
+					SwapDropAndHoldRedux::ExclusionsLoad();
+					SwapDropAndHoldRedux::WeaponThrowButtonsFind();
 
 					// NEW SKSEVR feature: trampoline interface object from QueryInterface() - Use SKSE existing process code memory pool - allow Skyrim to run without ASLR
 					if (SwapDropAndHoldRedux::g_trampolineInterface)
@@ -147,6 +183,7 @@ namespace SwapDropAndHoldRedux
 				else if (msg->type == SKSEMessagingInterface::kMessage_PostPostLoad)
 				{
 					SwapDropAndHoldReduxAPI::RegisterSwapDropAndHoldReduxInterface(g_pluginHandle, g_messaging);
+					SwapDropAndHoldRedux::GrabGripBroadcastOffer(g_pluginHandle, g_messaging, "PostPostLoad");
 					SwapDropAndHoldRedux::InitBitingAxesCompatibility(g_pluginHandle, g_messaging);
 
 					higgsInterface = HiggsPluginAPI::GetHiggsInterface001(g_pluginHandle, g_messaging);
@@ -157,6 +194,13 @@ namespace SwapDropAndHoldRedux
 						SwapDropAndHoldRedux::RegisterTriggerHoldLogger();
 						SwapDropAndHoldRedux::RegisterOppositeHandGrabLogger();
 						SwapDropAndHoldRedux::RegisterWeaponDrawHiggsCallback();
+						SwapDropAndHoldRedux::RegisterGripHold();
+						SwapDropAndHoldRedux::RegisterBlinkHoldBack();
+						SwapDropAndHoldRedux::RegisterMcmWatch();
+						SwapDropAndHoldRedux::RegisterHapticCensus();
+						SwapDropAndHoldRedux::RegisterGameGripGuard();
+						SwapDropAndHoldRedux::GripHoldDetectThrowMod();
+						SwapDropAndHoldRedux::RegisterWeaponSoundSilence();
 					}
 					else
 					{
@@ -191,6 +235,9 @@ namespace SwapDropAndHoldRedux
 						_MESSAGE("Did not get VRIK interface");
 					}
 
+					// Whether VRIK is new enough to answer holster questions (build 80700). Logged either way.
+					SwapDropAndHoldRedux::VrikHolsterApiInit();
+
 					skyrimVRESLInterface = SkyrimVRESLPluginAPI::GetSkyrimVRESLInterface001(g_pluginHandle, g_messaging);
 					if (skyrimVRESLInterface)
 					{
@@ -201,13 +248,42 @@ namespace SwapDropAndHoldRedux
 						_MESSAGE("Did not get SkyrimVRESL interface");
 					}
 
+					// Secondary IWP path; the broadcast listener is the reliable one.
+					SwapDropAndHoldRedux::RequestIwpInterface(g_pluginHandle, g_messaging);
+					if (!SwapDropAndHoldRedux::g_iwpInterface)
+					{
+						_MESSAGE("IWP interface not yet available (needs IWP 1.7.2+) — lodged weapons will use the built-in draw if it never arrives");
+					}
 				}
 				else if (msg->type == SKSEMessagingInterface::kMessage_PostLoadGame)
 				{
 					if ((bool)(msg->data) == true)
 					{
 						SwapDropAndHoldRedux::PostLoadGame();
+						SwapDropAndHoldRedux::McmWatchArm("the game loaded");
 					}
+				}
+				else if (msg->type == SKSEMessagingInterface::kMessage_PreLoadGame ||
+					msg->type == SKSEMessagingInterface::kMessage_NewGame)
+				{
+					SwapDropAndHoldRedux::GripHoldOnPreLoadGame();
+					SwapDropAndHoldRedux::HiggsReleaseOnPreLoadGame();
+					SwapDropAndHoldRedux::VrikHolsterOnPreLoadGame();
+					// A load throws away the script objects the menu watch reads; a new game has fresh ones.
+					if (msg->type == SKSEMessagingInterface::kMessage_NewGame)
+					{
+						SwapDropAndHoldRedux::McmWatchArm("a new game");
+					}
+					else
+					{
+						SwapDropAndHoldRedux::McmWatchDisarm();
+					}
+				}
+				else if (msg->type == SKSEMessagingInterface::kMessage_SaveGame)
+				{
+					// Nothing we mute is saved, but a save is a natural moment to be
+					// certain every borrowed sound is back where it belongs.
+					SwapDropAndHoldRedux::RestoreAllWeaponSounds();
 				}
 			}
 		}
@@ -220,12 +296,18 @@ namespace SwapDropAndHoldRedux
 
 			g_messaging = (SKSEMessagingInterface*)skse->QueryInterface(kInterface_Messaging);
 			g_messaging->RegisterListener(g_pluginHandle, "SKSE", OnSKSEMessage);
+			// All-sender listener, registered during plugin load so it exists before
+			// any other plugin's broadcast (IWP pushes its interface this way).
+			g_messaging->RegisterListener(g_pluginHandle, nullptr, OnAnySenderMessage);
 
 			g_vrInterface = (SKSEVRInterface*)skse->QueryInterface(kInterface_VR);
 			if (!g_vrInterface) {
 				_MESSAGE("[CRITICAL] Couldn't get SKSE VR interface. You probably have an outdated SKSE version.");
 				return false;
 			}
+
+			// A grip holding a weapon is hidden from menus until the hand opens - see MenuGrip.h.
+			RegisterMenuGripMask(g_pluginHandle, g_vrInterface);
 
 			return true;
 		}

@@ -66,10 +66,47 @@ static inline std::vector<std::string> split(const std::string& s, char delimite
 
 static inline void skipComments(std::string& str)
 {
-	auto pos = str.find("#");
+	// BOTH comment characters. MCM Helper writes ';' comments, and an inline one
+	// left in a value turns "1 ; note" into something that is not "1", so every
+	// commented toggle silently reads false.
+	auto pos = str.find_first_of("#;");
 	if (pos != std::string::npos)
 	{
 		str.erase(pos);
+	}
+}
+
+// MCM Helper writes its settings file with a UTF-8 BOM. Left in place the first
+// line reads "\xEF\xBB\xBF[Settings]", which is not recognised as a section
+// header, so every key beneath it lands in no section and is never read.
+static inline void stripUtf8Bom(std::string& str)
+{
+	if (str.size() >= 3 &&
+		static_cast<unsigned char>(str[0]) == 0xEF &&
+		static_cast<unsigned char>(str[1]) == 0xBB &&
+		static_cast<unsigned char>(str[2]) == 0xBF)
+	{
+		str.erase(0, 3);
+	}
+}
+
+// MCM Helper types a setting by its Hungarian prefix, so the menu's keys must be
+// bFoo / iFoo / fFoo / sFoo. This mod's ini shipped without those prefixes, so
+// the prefix is stripped here and the parser below matches one spelling for
+// both: an ini a player edited by hand keeps working, and the menu's own writes
+// land on the same setting.
+static inline void stripHungarianPrefix(std::string& name)
+{
+	if (name.size() < 2)
+	{
+		return;
+	}
+
+	const char prefix = name[0];
+	if ((prefix == 'b' || prefix == 'i' || prefix == 'f' || prefix == 's') &&
+		name[1] >= 'A' && name[1] <= 'Z')
+	{
+		name.erase(0, 1);
 	}
 }
 

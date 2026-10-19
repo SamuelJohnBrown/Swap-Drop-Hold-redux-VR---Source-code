@@ -3,6 +3,10 @@
   <ItemGroup>
     <ClCompile Include="main.cpp" />
     <ClCompile Include="Engine.cpp" />
+    <ClCompile Include="GripHold.cpp" />
+    <ClCompile Include="SilentEquip.cpp" />
+    <ClCompile Include="ThrowMomentum.cpp" />
+    <ClCompile Include="EmbedPins.cpp" />
     <ClCompile Include="RandomSelector.cpp" />
     <ClCompile Include="config.cpp" />
     <ClCompile Include="higgsinterface001.cpp" />
@@ -11,15 +15,35 @@
     <ClCompile Include="vrikinterface001.cpp" />
     <ClCompile Include="Helper.cpp" />
     <ClCompile Include="WeaponGrabLogger.cpp" />
+    <ClCompile Include="McmWatch.cpp" />
+    <ClCompile Include="HapticCensus.cpp" />
+    <ClCompile Include="GripTouch.cpp" />
+    <ClCompile Include="GrabPose.cpp" />
+    <ClCompile Include="GrabGripProvider.cpp" />
+    <ClCompile Include="CellLoadGuard.cpp" />
     <ClCompile Include="WeaponGrabActivator.cpp" />
     <ClCompile Include="WeaponDrawHandler.cpp" />
     <ClCompile Include="swapdropandholdreduxinterface001.cpp" />
     <ClCompile Include="TriggerHoldLogger.cpp" />
     <ClCompile Include="OppositeHandGrabLogger.cpp" />
+    <ClCompile Include="DropModelWatch.cpp" />
+    <ClCompile Include="HiggsHandWatch.cpp" />
+    <ClCompile Include="HiggsRelease.cpp" />
+    <ClCompile Include="VrikHolsterApi.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Utility.hpp" />
+    <ClInclude Include="DropModelWatch.h" />
+    <ClInclude Include="HiggsHandWatch.h" />
+    <ClInclude Include="HiggsRelease.h" />
+    <ClInclude Include="VrikHolsterApi.h" />
     <ClInclude Include="Engine.h" />
+    <ClInclude Include="GripHold.h" />
+    <ClInclude Include="RawHavok.h" />
+    <ClInclude Include="SilentEquip.h" />
+    <ClInclude Include="ThrowMomentum.h" />
+    <ClInclude Include="EmbedPins.h" />
+    <ClInclude Include="IwpInterface001.h" />
     <ClInclude Include="dirent.h" />
     <ClInclude Include="config.h" />
     <ClInclude Include="higgsinterface001.h" />
@@ -28,6 +52,20 @@
     <ClInclude Include="vrikinterface001.h" />
     <ClInclude Include="Helper.h" />
     <ClInclude Include="WeaponGrabLogger.h" />
+    <ClInclude Include="McmWatch.h" />
+    <ClInclude Include="HapticCensus.h" />
+    <ClInclude Include="VrikPulseRules.h" />
+    <ClInclude Include="GripTouch.h" />
+    <ClInclude Include="GripTouchRules.h" />
+    <ClInclude Include="GrabPose.h" />
+    <ClInclude Include="GrabPoseRules.h" />
+    <ClInclude Include="GrabGripProvider.h" />
+    <ClInclude Include="GrabGripRules.h" />
+    <ClInclude Include="HandSwitchRules.h" />
+    <ClInclude Include="CellLoadGuard.h" />
+    <ClInclude Include="CellLoadGuardRules.h" />
+    <ClInclude Include="SdhGrabGripInterface.h" />
+    <ClInclude Include="Mat3Rules.h" />
     <ClInclude Include="WeaponGrabActivator.h" />
     <ClInclude Include="TrackedWeapons.h" />
     <ClInclude Include="WeaponDrawHandler.h" />

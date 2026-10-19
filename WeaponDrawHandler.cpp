@@ -8,6 +8,8 @@
 #include <skse64/PapyrusEvents.h>
 #include <skse64/gamethreads.h>
 
+#include <chrono>
+
 namespace SwapDropAndHoldRedux
 {
 	extern SKSETaskInterface* g_task;
@@ -47,17 +49,35 @@ namespace SwapDropAndHoldRedux
 			return true;
 		}
 
-		void EnsureWeaponDrawn(PlayerCharacter* player)
+		// Returns true if it actually had to draw. That distinction matters: the draw
+		// is what plays the weapon's unsheathe sound and runs the draw animation, and
+		// it only happens when the player was sheathed to begin with — which is why a
+		// grab feels and sounds different on the main hand than on the off hand.
+		// IsWeaponDrawn() is (flags08 >> 5 & 7) >= 3, so it stays TRUE through
+		// kWantToSheathe(4) and kSheathing(5). Only 3 means drawn AND settled, and the
+		// whole forced-draw cycle turns on that distinction: a re-draw issued while the
+		// player is still in 4 or 5 cancels the sheathe instead of following it.
+		UInt32 PlayerDrawState(PlayerCharacter* player)
 		{
-			if (!player)
+			return player ? ((player->actorState.flags08 >> 5) & 7) : 99;
+		}
+
+		bool EnsureWeaponDrawn(PlayerCharacter* player)
+		{
+			if (!player || !weaponDrawOnEquip)
 			{
-				return;
+				return false;
 			}
 
-			if (!player->actorState.IsWeaponDrawn())
+			// Strict: reporting "already drawn" at state 4 or 5 skips a draw that really
+			// is needed and leaves the weapon equipped but invisible.
+			if (PlayerDrawState(player) == 3)
 			{
-				player->DrawSheatheWeapon(true);
+				return false;
 			}
+
+			player->DrawSheatheWeapon(true);
+			return true;
 		}
 
 		bool IsTwoHandProxyEquipped(PlayerCharacter* player)
@@ -74,6 +94,38 @@ namespace SwapDropAndHoldRedux
 		// request, leaving them equipped but sheathed (invisible). This task waits a
 		// few frames, requests the draw, and re-checks until the weapon is actually
 		// drawn before the final skeleton refresh.
+		float RefreshNowSeconds()
+		{
+			static const auto start = std::chrono::steady_clock::now();
+			return std::chrono::duration<float>(
+				std::chrono::steady_clock::now() - start).count();
+		}
+
+		// Straight through, no task requeue: AddTask from inside a task drains in the
+		// SAME frame, so a "wait N frames" loop built that way never waits at all. That
+		// mistake is what made the forced draw busy-wait a wall clock for 1.5s on every
+		// grab, and what made the dual-wield watch complete 90 frames in zero
+		// milliseconds without observing anything.
+		//
+		// The refresh itself was measured and changes nothing for other mods; it stays
+		// only because it is harmless, off by default, and someone may want it.
+		bool MaybeRefreshSkeleton(const bool alreadyDrawn)
+		{
+			if (!weaponSkeletonRefresh || !alreadyDrawn)
+			{
+				return false;
+			}
+
+			PlayerCharacter* player = *g_thePlayer;
+			if (!player || !HasTrackedWeaponEquipped(player) || IsTwoHandProxyEquipped(player))
+			{
+				return false;
+			}
+
+			papyrusActor::QueueNiNodeUpdate(player);
+			return true;
+		}
+
 		class DelayedWeaponDrawTask : public TaskDelegate
 		{
 		public:
@@ -102,7 +154,7 @@ namespace SwapDropAndHoldRedux
 					return;
 				}
 
-				if (!player->actorState.IsWeaponDrawn())
+				if (weaponDrawOnEquip && PlayerDrawState(player) != 3)
 				{
 					player->DrawSheatheWeapon(true);
 
@@ -113,7 +165,9 @@ namespace SwapDropAndHoldRedux
 					}
 				}
 
-				papyrusActor::QueueNiNodeUpdate(player);
+				// Reaching here means no draw was needed, which is exactly the case
+				// the refresh is for.
+				MaybeRefreshSkeleton(true);
 			}
 
 			virtual void Dispose() override
@@ -157,27 +211,66 @@ namespace SwapDropAndHoldRedux
 		};
 	}
 
-	void RedrawTrackedEquippedWeapons(const bool forceRefresh)
+	UInt32 PlayerWeaponDrawState(PlayerCharacter* player)
+	{
+		return PlayerDrawState(player);
+	}
+
+	bool RequestWeaponDrawAgain()
+	{
+		PlayerCharacter* player = *g_thePlayer;
+		if (!player || !weaponDrawOnEquip)
+		{
+			return false;
+		}
+		if (!HasTrackedWeaponEquipped(player) || !ShouldAllowDrawRefresh(player))
+		{
+			return false;
+		}
+		if (IsTwoHandProxyEquipped(player))
+		{
+			return false;
+		}
+		// Already out: never ask again. This is the whole difference between a watch and the
+		// upkeep that used to block sneak and jump.
+		if (PlayerDrawState(player) == 3)
+		{
+			return false;
+		}
+
+		player->DrawSheatheWeapon(true);
+		return true;
+	}
+
+	bool RedrawTrackedEquippedWeapons(const bool forceRefresh)
 	{
 		PlayerCharacter* player = *g_thePlayer;
 		if (!player || !HasTrackedWeaponEquipped(player) || !ShouldAllowDrawRefresh(player))
 		{
-			return;
+			return false;
 		}
 
-		EnsureWeaponDrawn(player);
+		const bool drew = EnsureWeaponDrawn(player);
 
-		if (forceRefresh)
-		{
-			papyrusActor::QueueNiNodeUpdate(player);
-		}
+		// Never refresh on top of a draw we just performed: the draw already did the
+		// announcing, and stacking a node rebuild on it is pure jolt for nothing.
+		const bool refreshed = forceRefresh && MaybeRefreshSkeleton(!drew);
+
+		// Printed on EVERY grab now, not only when something happened. The absence of
+		// this line was doing diagnostic work by implication in the last three rounds,
+		// and implication is what made the alignment wrong twice.
+		LOG_INFO(
+			"Weapon draw maintenance: drew=%s skeletonRefresh=%s",
+			drew ? "yes" : "no",
+			refreshed ? "queued" : (weaponSkeletonRefresh ? "not needed" : "off"));
+
+		return drew;
 	}
 
 	void ScheduleWeaponDrawMaintenance(const bool isLeftGameHand, const bool forTwoHandedWeapon)
 	{
 		// One-shot only. Multi-frame draw/sheathe upkeep blocks sneak/jump for seconds
 		// after grab-equip and causes equip SFX spam when dual-wielding.
-		(void)isLeftGameHand;
 
 		PlayerCharacter* player = *g_thePlayer;
 		if (!player)
@@ -195,6 +288,7 @@ namespace SwapDropAndHoldRedux
 
 		// Skeleton NiNode refresh is only safe/needed for 1H weapons; it destabilizes
 		// 2H equips mid-animation.
+		(void)isLeftGameHand;
 		RedrawTrackedEquippedWeapons(!forTwoHandedWeapon);
 	}
 

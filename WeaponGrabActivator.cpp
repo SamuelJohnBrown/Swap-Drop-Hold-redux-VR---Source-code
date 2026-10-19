@@ -1,8 +1,15 @@
 #include "WeaponGrabActivator.h"
+
+#include "DrawWatch.h"
+#include "HiggsHandWatch.h"
+#include "HiggsRelease.h"
 #include "WeaponDrawHandler.h"
 
 #include "Engine.h"
+#include "GrabPose.h"
+#include "GripHold.h"
 #include "Helper.h"
+#include "SilentEquip.h"
 #include "TrackedWeapons.h"
 #include "config.h"
 #include "swapdropandholdreduxinterface001.h"
@@ -12,6 +19,7 @@
 #include <skse64/GameExtraData.h>
 #include <skse64/gamethreads.h>
 
+#include <chrono>
 #include <unordered_set>
 
 namespace SwapDropAndHoldRedux
@@ -81,7 +89,11 @@ namespace SwapDropAndHoldRedux
 			}
 
 			InventoryEntryData* entryData = containerChanges->data->FindItemEntry(item);
-			return entryData && entryData->countDelta > 0;
+			(void)entryData;
+			// Deliberately NOT "countDelta > 0" — see PlayerItemCount. That test fails
+			// for every weapon the player started the game with, and a failed pickup
+			// check means the grab never equips anything.
+			return PlayerItemCount(player, item) > 0;
 		}
 
 		BaseExtraList* FindUnwornInventoryExtraData(PlayerCharacter* player, TESForm* weaponForm)
@@ -132,6 +144,7 @@ namespace SwapDropAndHoldRedux
 
 			// Do not early-out on "already owns this base form" — that skips picking up
 			// the world ref and leaves a second copy in the world / HIGGS hand.
+			SilenceWeaponSoundsFor(grabbedRefr->baseForm);
 			return RefActivate(grabbedRefr, player, 0, 0, 1, false);
 		}
 
@@ -370,7 +383,18 @@ namespace SwapDropAndHoldRedux
 			// extraData may legitimately be null for a plain weapon with no
 			// inventory extra lists; EquipItem handles a null extra fine.
 			BaseExtraList* extraData = FindUnwornInventoryExtraData(player, weaponForm);
-			BGSEquipSlot* slot = isLeftGameHand ? GetLeftHandSlot() : GetRightHandSlot();
+
+			// A real two-hander owns the both-hands slot. Forcing a left/right hand
+			// slot onto it produces a broken equip rather than a mirrored one, so pass
+			// null and let the engine use the weapon's own slot. (2H Weapons Unlocked
+			// proxies are authored as 1H and keep the hand slot.)
+			BGSEquipSlot* slot = nullptr;
+			if (!IsTwoHandedWeaponForm(weaponForm))
+			{
+				slot = isLeftGameHand ? GetLeftHandSlot() : GetRightHandSlot();
+			}
+
+			SilenceWeaponSoundsFor(weaponForm);
 			CALL_MEMBER_FN(equipMan, EquipItem)(player, weaponForm, extraData, 1, slot, false, true, false, nullptr);
 		}
 
@@ -424,6 +448,11 @@ namespace SwapDropAndHoldRedux
 					}
 				}
 
+				// 3.0.0: tell a listening grip driver where, and which way round, this weapon was taken hold of.
+				// BEFORE the equip - its rebuild of the skeleton is the edge the driver applies the grip on - and
+				// before the intercept, which returns without reaching the end of this task.
+				GrabPosePublishForEquip(m_isLeftGameHand, m_weaponFormID);
+
 				if (SwapDropAndHoldReduxAPI::QueryWeaponGrabEquipIntercept(event))
 				{
 					LOG_INFO(
@@ -446,11 +475,18 @@ namespace SwapDropAndHoldRedux
 					ScheduleWeaponDrawMaintenance(m_isLeftGameHand, IsTwoHandedWeaponForm(weaponForm));
 				}
 
+				// The draw just asked for is a REQUEST, not a promise. Follow it until the weapon
+				// is really out, because a swallowed one leaves it equipped and sheathed - which
+				// in VR is a weapon that is simply not in your hand.
+				DrawWatchBegin(m_isLeftGameHand, weaponForm);
+
 				LOG_INFO(
 					"Item equipped to %s hand: %s formId=%08X",
 					m_isLeftGameHand ? "left" : "right",
 					GetSafeFormName(weaponForm),
 					m_weaponFormID);
+
+				GripHoldOnGrabEquipped(m_isLeftGameHand, m_weaponFormID);
 
 				SwapDropAndHoldReduxAPI::NotifyWeaponGrabEquipped(event);
 			}
@@ -490,12 +526,15 @@ namespace SwapDropAndHoldRedux
 				const UInt32 weaponFormID,
 				const float pullSpeed,
 				const Phase phase = kSettle,
-				const int settleFramesRemaining = kSwapPullSettleFrames)
+				const int settleFramesRemaining = kSwapPullSettleFrames,
+				const bool handOff = false)
 				: m_isLeftSourceHand(isLeftSourceHand)
 				, m_weaponFormID(weaponFormID)
 				, m_pullSpeed(pullSpeed)
 				, m_phase(phase)
 				, m_settleFramesRemaining(settleFramesRemaining)
+				, m_handOff(handOff)
+				, m_scheduledAt(std::chrono::steady_clock::now())
 			{
 			}
 
@@ -519,7 +558,8 @@ namespace SwapDropAndHoldRedux
 								m_weaponFormID,
 								m_pullSpeed,
 								kSettle,
-								m_settleFramesRemaining - 1));
+								m_settleFramesRemaining - 1,
+								m_handOff));
 						}
 						return;
 					}
@@ -527,12 +567,20 @@ namespace SwapDropAndHoldRedux
 					if (g_task)
 					{
 						g_task->AddTask(new SwapPullEquipTask(
-							m_isLeftSourceHand, m_weaponFormID, m_pullSpeed, kEquip, 0));
+							m_isLeftSourceHand, m_weaponFormID, m_pullSpeed, kEquip, 0, m_handOff));
 					}
 					return;
 				}
 
 				const bool isLeftDestHand = !m_isLeftSourceHand;
+
+				// M3.0.0-test14, the hand switch: tell a listening grip driver where, and which way round, the receiving
+				// hand held the weapon (measured at the release, GrabPoseOnHandOff) - BEFORE the equip, like a pickup
+				// (EquipGrabbedWeaponTask), and before the intercept below, which returns early.
+				if (m_handOff)
+				{
+					GrabPosePublishForEquip(isLeftDestHand, m_weaponFormID);
+				}
 
 				SwapDropAndHoldReduxAPI::WeaponHandEvent event{};
 				event.eventType = SwapDropAndHoldReduxAPI::kSwapPullComplete;
@@ -564,6 +612,7 @@ namespace SwapDropAndHoldRedux
 				if (IsTrackedWeaponForm(weaponForm))
 				{
 					ScheduleWeaponDrawMaintenance(isLeftDestHand, IsTwoHandedWeaponForm(weaponForm));
+					DrawWatchBegin(isLeftDestHand, weaponForm);
 				}
 
 				const char* typeLabel = GetTrackedItemTypeLabel(weaponForm);
@@ -576,6 +625,20 @@ namespace SwapDropAndHoldRedux
 					isLeftDestHand ? "left" : "right",
 					m_weaponFormID,
 					m_pullSpeed);
+
+				if (m_handOff)
+				{
+					LOG_INFO(
+						"Hand switch: moved %s to the %s hand %.3fs after the release.",
+						GetSafeFormName(weaponForm),
+						isLeftDestHand ? "left" : "right",
+						std::chrono::duration<float>(std::chrono::steady_clock::now() - m_scheduledAt).count());
+				}
+
+				// The receiving hand has just acquired a weapon with its grip already closed,
+				// exactly as a pickup does - so it needs the same bookkeeping, or Weapon Throw VR
+				// will not throw it and the bind that follows reads as a draw out of a holster.
+				GripHoldOnHandOffComplete(isLeftDestHand, m_weaponFormID);
 
 				SwapDropAndHoldReduxAPI::NotifySwapPullComplete(event);
 			}
@@ -591,6 +654,8 @@ namespace SwapDropAndHoldRedux
 			float m_pullSpeed;
 			Phase m_phase;
 			int m_settleFramesRemaining;
+			bool m_handOff;
+			std::chrono::steady_clock::time_point m_scheduledAt;
 		};
 
 		class PickupGrabbedWeaponTask : public TaskDelegate
@@ -649,6 +714,11 @@ namespace SwapDropAndHoldRedux
 						// even if the base form is already in inventory. Skipping Activate
 						// here left the ref in the HIGGS hand and it fell to the ground as
 						// a duplicate on release (bow drop/re-grab cycles hit this).
+						HiggsHandWatchNotePickup(GameHandToVRController(m_isLeftGameHand), weaponRef);
+						// Before the activate takes the weapon's 3D away: a HIGGS hand still holding it has
+						// to let go the normal way, or it keeps the weapon as its selection and will not
+						// select or pull it again. HiggsRelease.h has the why.
+						HiggsReleaseBeforePickup(weaponRef);
 						ActivateGrabbedRef(weaponRef, player);
 						m_activateAttempted = true;
 					}
@@ -755,5 +825,21 @@ namespace SwapDropAndHoldRedux
 		}
 
 		g_task->AddTask(new SwapPullEquipTask(isLeftSourceHand, weaponFormID, pullSpeed));
+	}
+
+	// GripHold hand-off: the release-grip transfer deliberately skips the swap-pull
+	// exclusion list — releasing one hand while the other physically grips the weapon
+	// is not the swap gesture, and the user explicitly wants it for every weapon.
+	void ScheduleGripHandOff(const bool isLeftSourceHand, const UInt32 weaponFormID)
+	{
+		if (!g_task || weaponFormID == 0)
+		{
+			return;
+		}
+
+		// The hand switch (M3.0.0-test14) goes straight to the equip: the 8 settle frames are the Legacy swap pull's
+		// (Machina's original, no reason recorded), and a weapon still equipped in the other hand has nothing to
+		// settle.
+		g_task->AddTask(new SwapPullEquipTask(isLeftSourceHand, weaponFormID, 0.0f, SwapPullEquipTask::kEquip, 0, true));
 	}
 }

@@ -20,7 +20,7 @@ namespace SwapDropAndHoldRedux
 
 	namespace
 	{
-		static const uint64_t GRIP_BUTTON_MASK = (1ull << 2);
+		#define GRIP_BUTTON_MASK (gripButtonMask)
 		static const float kHavokToSkyrim = 69.99125f;
 		static const float kOppositeGrabMaxDistance = 50.0f;
 		static const float kOppositeGrabReleaseGraceSeconds = 0.35f;
@@ -524,6 +524,15 @@ namespace SwapDropAndHoldRedux
 					return;
 				}
 
+				// A sheathed weapon is on the body, not in a hand. HIGGS keeps reporting a
+				// grab on it every frame while the other hand is anywhere near it, which
+				// buried a holstered session under sixty of these lines a second.
+				PlayerCharacter* thePlayer = *g_thePlayer;
+				if (thePlayer && ((thePlayer->actorState.flags08 >> 5) & 7) != 3)
+				{
+					return;
+				}
+
 				LOG_INFO(
 					"Opposite hand grab: %s controller grabbed item equipped on %s hand: %s (%s) formId=%08X refId=%08X",
 					m_isLeftGrabController ? "left" : "right",
@@ -640,6 +649,14 @@ namespace SwapDropAndHoldRedux
 			const UInt32 weaponFormID,
 			const float pullSpeed)
 		{
+			// GripHold mode replaces the swap-pull gesture with grip-release hand-off;
+			// detection still runs (GripHold consumes the latched state), only the
+			// swap action is suppressed.
+			if (gripHoldMode)
+			{
+				return;
+			}
+
 			if (!g_task || weaponFormID == 0)
 			{
 				return;
@@ -921,5 +938,15 @@ namespace SwapDropAndHoldRedux
 		higgsInterface->AddStopTwoHandingCallback(OnStopTwoHanding);
 		s_registered = true;
 		LOG_INFO("Opposite hand grab logger registered (cross-hand grab and swap pull detection).");
+	}
+
+	// GripHold: is the opposite hand currently engaging the weapon equipped on this
+	// game hand (two-handing latch, with its release grace still running)?
+	bool IsOppositeHandEngaged(const bool isLeftEquippedHand)
+	{
+		const EquippedHandGrabState& state = isLeftEquippedHand
+			? s_leftEquippedGrabState
+			: s_rightEquippedGrabState;
+		return state.latchedOppositeGrab;
 	}
 }

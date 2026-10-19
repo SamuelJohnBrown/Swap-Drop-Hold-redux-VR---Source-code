@@ -31,6 +31,7 @@ namespace SwapDropAndHoldReduxAPI
 				if (callback)
 				{
 					_grabEquippedCallbacks.push_back(callback);
+					_MESSAGE("Swap Drop & Hold redux API: a mod registered a grab-equipped listener (%zu total).", _grabEquippedCallbacks.size());
 				}
 			}
 
@@ -39,6 +40,7 @@ namespace SwapDropAndHoldReduxAPI
 				if (callback)
 				{
 					_triggerHoldDroppedCallbacks.push_back(callback);
+					_MESSAGE("Swap Drop & Hold redux API: a mod registered a DROP listener (%zu total).", _triggerHoldDroppedCallbacks.size());
 				}
 			}
 
@@ -47,6 +49,7 @@ namespace SwapDropAndHoldReduxAPI
 				if (callback)
 				{
 					_swapPullCompleteCallbacks.push_back(callback);
+					_MESSAGE("Swap Drop & Hold redux API: a mod registered a swap-pull listener (%zu total).", _swapPullCompleteCallbacks.size());
 				}
 			}
 
@@ -55,6 +58,7 @@ namespace SwapDropAndHoldReduxAPI
 				if (callback)
 				{
 					_allEventCallbacks.push_back(callback);
+					_MESSAGE("Swap Drop & Hold redux API: a mod registered an all-events listener (%zu total).", _allEventCallbacks.size());
 				}
 			}
 
@@ -63,6 +67,7 @@ namespace SwapDropAndHoldReduxAPI
 				if (callback)
 				{
 					_grabEquipInterceptCallbacks.push_back(callback);
+					_MESSAGE("Swap Drop & Hold redux API: a mod registered an equip intercept (%zu total).", _grabEquipInterceptCallbacks.size());
 				}
 			}
 
@@ -71,6 +76,7 @@ namespace SwapDropAndHoldReduxAPI
 				if (callback)
 				{
 					_grabPickupInterceptCallbacks.push_back(callback);
+					_MESSAGE("Swap Drop & Hold redux API: a mod registered a PICKUP intercept (%zu total).", _grabPickupInterceptCallbacks.size());
 				}
 			}
 
@@ -81,6 +87,14 @@ namespace SwapDropAndHoldReduxAPI
 
 			void NotifyTriggerHoldDropped(const WeaponHandEvent& event)
 			{
+				// Counted on every drop so a player's log answers, without guessing,
+				// whether any other mod is listening at all. Zero here means announcing
+				// drops cannot be what fixes a problem with another mod.
+				_MESSAGE(
+					"Swap Drop & Hold redux API: drop of formId=%08X announced to %zu drop listener(s) and %zu all-events listener(s).",
+					event.weaponFormID,
+					_triggerHoldDroppedCallbacks.size(),
+					_allEventCallbacks.size());
 				DispatchEvent(event, _triggerHoldDroppedCallbacks);
 			}
 
@@ -159,6 +173,12 @@ namespace SwapDropAndHoldReduxAPI
 
 			auto* apiMsg = static_cast<SwapDropMessage*>(msg->data);
 			apiMsg->GetApiFunction = GetApiFunction;
+
+			// The registration lines do not say WHICH mod made them, but a mod registers
+			// straight after asking for the interface, so in the log they follow this line.
+			_MESSAGE(
+				"Swap Drop & Hold redux API: interface handed to '%s'.",
+				msg->sender ? msg->sender : "an unnamed plugin");
 		}
 	}
 

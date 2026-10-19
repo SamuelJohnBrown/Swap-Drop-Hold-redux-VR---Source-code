@@ -250,41 +250,86 @@ namespace SwapDropAndHoldRedux
 		SetPlayerOwnership(&objRef->extraData);
 	}
 
+	namespace
+	{
+		// The menus that take VR controller input away from the world. One list, so
+		// "is one of them open?" and "is this one of them?" can never disagree.
+		size_t GetInputCapturingMenus(BSFixedString** out, const size_t capacity)
+		{
+			UIStringHolder* menuNames = UIStringHolder::GetSingleton();
+			if (!menuNames)
+			{
+				return 0;
+			}
+
+			BSFixedString* capturingMenus[] = {
+				&menuNames->containerMenu,
+				&menuNames->inventoryMenu,
+				&menuNames->magicMenu,
+				&menuNames->barterMenu,
+				&menuNames->giftMenu,
+				&menuNames->favoritesMenu,
+				&menuNames->craftingMenu,
+				&menuNames->dialogueMenu,
+				&menuNames->journalMenu,
+				&menuNames->bookMenu,
+				&menuNames->mapMenu,
+				&menuNames->statsMenu,
+				&menuNames->lockpickingMenu,
+				&menuNames->trainingMenu,
+				&menuNames->tweenMenu,
+				&menuNames->sleepWaitMenu,
+				&menuNames->levelUpMenu,
+				&menuNames->quantityMenu,
+				&menuNames->messageBoxMenu,
+				&menuNames->raceSexMenu,
+			};
+
+			size_t count = 0;
+			for (BSFixedString* name : capturingMenus)
+			{
+				if (count < capacity)
+				{
+					out[count++] = name;
+				}
+			}
+			return count;
+		}
+	}
+
 	bool IsInputCapturingMenuOpen()
 	{
 		MenuManager* menuManager = MenuManager::GetSingleton();
-		UIStringHolder* menuNames = UIStringHolder::GetSingleton();
-		if (!menuManager || !menuNames)
+		if (!menuManager)
 		{
 			return false;
 		}
 
-		BSFixedString* openMenus[] = {
-			&menuNames->containerMenu,
-			&menuNames->inventoryMenu,
-			&menuNames->magicMenu,
-			&menuNames->barterMenu,
-			&menuNames->giftMenu,
-			&menuNames->favoritesMenu,
-			&menuNames->craftingMenu,
-			&menuNames->dialogueMenu,
-			&menuNames->journalMenu,
-			&menuNames->bookMenu,
-			&menuNames->mapMenu,
-			&menuNames->statsMenu,
-			&menuNames->lockpickingMenu,
-			&menuNames->trainingMenu,
-			&menuNames->tweenMenu,
-			&menuNames->sleepWaitMenu,
-			&menuNames->levelUpMenu,
-			&menuNames->quantityMenu,
-			&menuNames->messageBoxMenu,
-			&menuNames->raceSexMenu,
-		};
-
-		for (BSFixedString* menuName : openMenus)
+		BSFixedString* names[32];
+		const size_t count = GetInputCapturingMenus(names, 32);
+		for (size_t i = 0; i < count; ++i)
 		{
-			if (menuManager->IsMenuOpen(menuName))
+			if (menuManager->IsMenuOpen(names[i]))
+			{
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	bool IsInputCapturingMenuName(const BSFixedString& menuName)
+	{
+		if (!menuName.data)
+		{
+			return false;
+		}
+
+		BSFixedString* names[32];
+		const size_t count = GetInputCapturingMenus(names, 32);
+		for (size_t i = 0; i < count; ++i)
+		{
+			if (names[i]->data == menuName.data)
 			{
 				return true;
 			}
