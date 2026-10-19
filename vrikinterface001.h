@@ -48,6 +48,12 @@ namespace vrikPluginApi {
 		//Gets the smoothing offsetting amount for the next frame. This is for calling it after VRIK's hook.
 		virtual NiPoint3 getFinalSmoothingOffsettingAmount() = 0;
 		
+		//Holster functions. Check Build number 80700 or higher before calling these
+		virtual int GetHolsterSlotInReach(bool secondaryHand) = 0;
+		virtual bool CanBeHolstered(bool secondaryHand) = 0;
+		virtual bool HolsterWeapon(bool secondaryHand) = 0;
+		virtual bool UnHolsterWeapon(bool secondaryHand) = 0;
+		
 	};
 }
 

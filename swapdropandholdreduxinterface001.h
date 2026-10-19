@@ -18,6 +18,9 @@ namespace SwapDropAndHoldReduxAPI
 	enum WeaponHandEventType : std::uint32_t
 	{
 		kWeaponGrabEquipped = 1,
+		// Sent for EVERY drop from the hand since M2.0.5: trigger-hold drops, where the world
+		// model is grabbed back into a HIGGS hand, and grip-release drops, where it is left loose.
+		// Before that, grip-release drops - the default since 2.0.0 - announced nothing.
 		kTriggerHoldDropped = 2,
 		kSwapPullComplete = 3,
 		kWeaponGrabPickup = 4,

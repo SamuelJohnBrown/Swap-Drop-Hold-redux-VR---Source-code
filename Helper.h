@@ -1,4 +1,6 @@
 #pragma once
+
+#include "skse64/GameTypes.h"
 #include "skse64/PapyrusSpell.h"
 #include "skse64/PapyrusGame.h"
 #include "skse64/PapyrusActor.h"
@@ -45,5 +47,9 @@ namespace SwapDropAndHoldRedux
 	// True when a Scaleform menu is open that captures VR controller input (SkyUI-VR routes
 	// GetControllerState into the menu — polling it from HIGGS callbacks crashes crafting/UI).
 	bool IsInputCapturingMenuOpen();
+
+	// True if this menu is one of the ones IsInputCapturingMenuOpen watches - for
+	// recognising them as they open and close. Both read the same list.
+	bool IsInputCapturingMenuName(const BSFixedString& menuName);
 
 }

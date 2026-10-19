@@ -1,15 +1,66 @@
 #pragma once
 
+#include "Exclusions.h"
 #include "config.h"
 
 #include <skse64/GameData.h>
 #include <skse64/GameReferences.h>
 #include <skse64/GameObjects.h>
 #include <skse64/GameRTTI.h>
+#include <skse64/GameExtraData.h>
+#include <skse64/GameFormComponents.h>
 
 namespace SwapDropAndHoldRedux
 {
 	UInt32 GetFullFormIdMine(const char* espName, UInt32 baseFormId);
+
+	// How many of an item the player actually has.
+	//
+	// InventoryEntryData::countDelta is a DELTA against the actor's BASE container,
+	// not a count. For anything the player started the game holding — an alternate
+	// start mod's kit, a custom race's gear, anything authored into the player's own
+	// base container — it reads 0 while the weapon is plainly in their hands, and it
+	// goes NEGATIVE the moment we remove one. Reading it as a count therefore makes
+	// an equipped weapon look like it does not exist, which is what stopped grabs
+	// equipping: the pickup could never be confirmed, so the equip never ran and the
+	// weapon just sat in the inventory.
+	//
+	// The real total is the base container's count plus the delta.
+	inline SInt32 PlayerItemCount(PlayerCharacter* player, TESForm* item)
+	{
+		if (!player || !item)
+		{
+			return 0;
+		}
+
+		SInt32 total = 0;
+
+		TESNPC* baseNpc = DYNAMIC_CAST(player->baseForm, TESForm, TESNPC);
+		if (baseNpc)
+		{
+			for (UInt32 i = 0; i < baseNpc->container.numEntries; ++i)
+			{
+				TESContainer::Entry* entry = baseNpc->container.entries[i];
+				if (entry && entry->form == item)
+				{
+					total += static_cast<SInt32>(entry->count);
+				}
+			}
+		}
+
+		auto* containerChanges = static_cast<ExtraContainerChanges*>(
+			player->extraData.GetByType(kExtraData_ContainerChanges));
+		if (containerChanges && containerChanges->data)
+		{
+			InventoryEntryData* entryData = containerChanges->data->FindItemEntry(item);
+			if (entryData)
+			{
+				total += entryData->countDelta;
+			}
+		}
+
+		return total;
+	}
 
 	inline bool IsTwoHandedWeaponTypeRaw(const UInt8 weaponType)
 	{
@@ -215,7 +266,8 @@ namespace SwapDropAndHoldRedux
 			break;
 		}
 
-		return IsConfiguredExcludedFormId(form->formID);
+		// The ini's list, then the one the player built from the menu.
+		return IsConfiguredExcludedFormId(form->formID) || ExclusionsContains(form->formID);
 	}
 
 	inline bool IsTrackedWeaponForm(TESForm* form)
@@ -335,12 +387,28 @@ namespace SwapDropAndHoldRedux
 	// IsTrackedItemForm).
 	inline bool IsGrabEquipDropItemForm(TESForm* form)
 	{
+		// Belt and braces. The four below each check exclusion themselves, but this is
+		// the gate every grab and every drop passes through, and an exclusion that is
+		// honoured in four places out of five is not an exclusion.
+		if (IsExcludedWeaponForm(form))
+		{
+			return false;
+		}
+
 		return IsTrackedItemForm(form) || IsBowWeaponForm(form) || IsCrossbowWeaponForm(form) || IsTorchLightForm(form);
 	}
 
 	inline bool IsTwoHandedWeaponForm(TESForm* form)
 	{
 		if (!form || form->formType != kFormType_Weapon)
+		{
+			return false;
+		}
+
+		// This was the hole. GetTrackedWeaponForVRController reaches its two-handed
+		// branch through here, and here never asked, so excluding a greatsword excluded
+		// it from the one-handed path and nowhere else.
+		if (IsExcludedWeaponForm(form))
 		{
 			return false;
 		}
@@ -354,6 +422,11 @@ namespace SwapDropAndHoldRedux
 	// battleaxes and must be treated as 2H here.
 	inline bool IsTwoHandProxyForm(TESForm* form)
 	{
+		if (IsExcludedWeaponForm(form))
+		{
+			return false;
+		}
+
 		if (!form || form->formType != kFormType_Weapon)
 		{
 			return false;
@@ -397,6 +470,11 @@ namespace SwapDropAndHoldRedux
 	// Authored as armor; always excluded from swap pull (grab-equip and drop still work).
 	inline bool IsShieldProxyForm(TESForm* form)
 	{
+		if (IsExcludedWeaponForm(form))
+		{
+			return false;
+		}
+
 		if (!form)
 		{
 			return false;
